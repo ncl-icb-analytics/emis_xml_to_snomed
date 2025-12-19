@@ -166,24 +166,51 @@ export default function FolderTreeNavigation() {
   }, [folderTree, currentPath]);
 
   const filteredItems = useMemo(() => {
-    if (!currentNode) return { folders: [], reports: [] };
+    if (!searchQuery || !folderTree) {
+      // When not searching, show current folder contents
+      if (!currentNode) return { folders: [], reports: [] };
 
+      const folders = Array.from(currentNode.subfolders.values())
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+      const reports = currentNode.reports
+        .sort((a, b) => a.searchName.localeCompare(b.searchName));
+
+      return { folders, reports };
+    }
+
+    // Global search across entire tree
     const query = searchQuery.toLowerCase();
+    const allFolders: FolderNode[] = [];
+    const allReports: EmisReport[] = [];
 
-    const folders = Array.from(currentNode.subfolders.values())
-      .filter((folder) => folder.name.toLowerCase().includes(query))
-      .sort((a, b) => a.name.localeCompare(b.name));
+    const searchNode = (node: FolderNode) => {
+      // Search folders
+      node.subfolders.forEach((folder) => {
+        if (folder.name.toLowerCase().includes(query)) {
+          allFolders.push(folder);
+        }
+        searchNode(folder); // Recurse into subfolders
+      });
 
-    const reports = currentNode.reports
-      .filter(
-        (report) =>
+      // Search reports
+      node.reports.forEach((report) => {
+        if (
           report.name.toLowerCase().includes(query) ||
           report.searchName.toLowerCase().includes(query)
-      )
-      .sort((a, b) => a.searchName.localeCompare(b.searchName));
+        ) {
+          allReports.push(report);
+        }
+      });
+    };
 
-    return { folders, reports };
-  }, [currentNode, searchQuery]);
+    searchNode(folderTree);
+
+    return {
+      folders: allFolders.sort((a, b) => a.name.localeCompare(b.name)),
+      reports: allReports.sort((a, b) => a.searchName.localeCompare(b.searchName)),
+    };
+  }, [folderTree, currentNode, searchQuery]);
 
   const handleReportClick = (report: EmisReport) => {
     console.log('Dispatching report-selected event:', report);
@@ -331,14 +358,19 @@ export default function FolderTreeNavigation() {
             {filteredItems.folders.map((folder) => (
               <div
                 key={folder.path.join('/')}
-                className="flex items-center gap-2 px-2 py-1.5 rounded-sm cursor-pointer hover:bg-accent transition-colors text-sm"
+                className="flex flex-col gap-0.5 px-2 py-1.5 rounded-sm cursor-pointer hover:bg-accent transition-colors text-sm"
                 onClick={() => handleFolderClick(folder.path.join('/'))}
               >
-                <Folder className="h-4 w-4 text-blue-500 flex-shrink-0" />
-                <span className="flex-1 truncate">{folder.name}</span>
-                <Badge variant="secondary" className="text-xs h-5">
-                  {countReports(folder)}
-                </Badge>
+                <div className="flex items-center gap-2">
+                  <Folder className="h-4 w-4 text-blue-500 flex-shrink-0" />
+                  <span className="flex-1 truncate font-medium">{folder.name}</span>
+                  <Badge variant="secondary" className="text-xs h-5">
+                    {countReports(folder)}
+                  </Badge>
+                </div>
+                <div className="text-xs text-muted-foreground pl-6 truncate">
+                  {folder.path.join(' > ')}
+                </div>
               </div>
             ))}
             {filteredItems.reports.map((report) => (
@@ -346,16 +378,21 @@ export default function FolderTreeNavigation() {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <div
-                      className={`flex items-center gap-2 px-2 py-1.5 rounded-sm cursor-pointer hover:bg-accent transition-colors text-sm ${
+                      className={`flex flex-col gap-0.5 px-2 py-1.5 rounded-sm cursor-pointer hover:bg-accent transition-colors text-sm ${
                         selectedReportId === report.id ? 'bg-accent' : ''
                       }`}
                       onClick={() => handleReportClick(report)}
                     >
-                      <FileText className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                      <span className="flex-1 truncate">{report.searchName}</span>
-                      <Badge variant="outline" className="text-xs h-5">
-                        {report.valueSets.length}
-                      </Badge>
+                      <div className="flex items-center gap-2">
+                        <FileText className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                        <span className="flex-1 truncate">{report.searchName}</span>
+                        <Badge variant="outline" className="text-xs h-5">
+                          {report.valueSets.length}
+                        </Badge>
+                      </div>
+                      <div className="text-xs text-muted-foreground pl-5 truncate">
+                        {report.rule}
+                      </div>
                     </div>
                   </TooltipTrigger>
                   <TooltipContent side="right" className="max-w-md">
@@ -363,6 +400,7 @@ export default function FolderTreeNavigation() {
                     {report.name !== report.searchName && (
                       <p className="text-xs text-muted-foreground mt-1">{report.name}</p>
                     )}
+                    <p className="text-xs text-muted-foreground mt-1">{report.rule}</p>
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
