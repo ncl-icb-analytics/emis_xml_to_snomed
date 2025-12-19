@@ -311,7 +311,7 @@ export async function POST(request: NextRequest) {
 
         // Small delay between ValueSet expansions to avoid rate limiting
         if (mapping !== valueSetMapping[valueSetMapping.length - 1]) {
-          await new Promise(resolve => setTimeout(resolve, 100));
+          await new Promise(resolve => setTimeout(resolve, 10));
         }
       }
     } else {
@@ -329,7 +329,7 @@ export async function POST(request: NextRequest) {
             expandedConcepts.push(...batchConcepts);
 
             if (i + BATCH_SIZE < values.length) {
-              await new Promise(resolve => setTimeout(resolve, 100));
+              await new Promise(resolve => setTimeout(resolve, 10));
             }
           } catch (error) {
             console.error(`Error expanding batch:`, error);
