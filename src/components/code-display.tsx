@@ -29,29 +29,21 @@ const getCodeSystemBadgeClass = (codeSystem?: string): string => {
 
   const system = codeSystem.toUpperCase();
 
-  // SNOMED codes (blue)
-  if (system.includes('SNOMED') || system.includes('SCT_CONST')) {
+  // SNOMED_CONCEPT (blue)
+  if (system === 'SNOMED_CONCEPT') {
     return 'text-xs bg-blue-50 text-blue-700 border-blue-200';
   }
-  // Drug/medication codes (green)
-  if (system.includes('SCT_DRGGRP') || system.includes('DRUG')) {
-    return 'text-xs bg-green-50 text-green-700 border-green-200';
-  }
-  // EMIS codes (orange)
-  if (system.includes('EMIS') || system.includes('EMISINTERNAL')) {
-    return 'text-xs bg-orange-50 text-orange-700 border-orange-200';
-  }
-  // Read codes (purple)
-  if (system.includes('READ') || system.includes('CTV3')) {
-    return 'text-xs bg-purple-50 text-purple-700 border-purple-200';
-  }
-  // ICD codes (pink)
-  if (system.includes('ICD')) {
+  // SCT_CONST (pink)
+  if (system === 'SCT_CONST') {
     return 'text-xs bg-pink-50 text-pink-700 border-pink-200';
   }
-  // OPCS codes (cyan)
-  if (system.includes('OPCS')) {
-    return 'text-xs bg-cyan-50 text-cyan-700 border-cyan-200';
+  // SCT_DRGGRP (green)
+  if (system === 'SCT_DRGGRP') {
+    return 'text-xs bg-green-50 text-green-700 border-green-200';
+  }
+  // EMISINTERNAL (purple)
+  if (system === 'EMISINTERNAL' || system === 'EMIS') {
+    return 'text-xs bg-purple-50 text-purple-700 border-purple-200';
   }
 
   return 'text-xs bg-gray-50 text-gray-700 border-gray-200';
