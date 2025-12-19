@@ -174,6 +174,48 @@ export default function CodeDisplay({ expandedCodes, report }: CodeDisplayProps)
         </div>
       </Card>
 
+      {/* Mapping Status Summary */}
+      {expandedCodes.valueSetGroups && (() => {
+        const totalFailedCodes = expandedCodes.valueSetGroups.reduce(
+          (sum, group) => sum + (group.failedCodes?.length || 0),
+          0
+        );
+        const totalValueSets = expandedCodes.valueSetGroups.length;
+        const failedValueSets = expandedCodes.valueSetGroups.filter(
+          group => group.failedCodes && group.failedCodes.length > 0
+        ).length;
+
+        return (
+          <Card className={totalFailedCodes > 0 ? 'border-orange-200 bg-orange-50/50' : 'border-green-200 bg-green-50/50'}>
+            <div className="px-4 py-3 flex items-center gap-2">
+              {totalFailedCodes > 0 ? (
+                <>
+                  <XCircle className="w-5 h-5 text-orange-600 flex-shrink-0" />
+                  <div>
+                    <p className="font-semibold text-orange-900">
+                      {totalFailedCodes} code{totalFailedCodes !== 1 ? 's' : ''} failed to map
+                    </p>
+                    <p className="text-sm text-orange-700">
+                      {failedValueSets} of {totalValueSets} ValueSet{totalValueSets !== 1 ? 's' : ''} had mapping failures
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0" />
+                  <div>
+                    <p className="font-semibold text-green-900">All codes successfully mapped</p>
+                    <p className="text-sm text-green-700">
+                      All {totalValueSets} ValueSet{totalValueSets !== 1 ? 's' : ''} expanded without errors
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
+          </Card>
+        );
+      })()}
+
       {/* ValueSets Table */}
       <Card>
         <Table>
