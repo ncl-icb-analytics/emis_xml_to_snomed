@@ -22,37 +22,39 @@ interface CodeDisplayProps {
   report?: EmisReport;
 }
 
-const getCodeSystemColor = (codeSystem?: string) => {
-  if (!codeSystem) return 'bg-gray-50 text-gray-700 border-gray-200';
+const getCodeSystemBadgeClass = (codeSystem?: string): string => {
+  if (!codeSystem) {
+    return 'text-xs bg-gray-50 text-gray-700 border-gray-200';
+  }
 
   const system = codeSystem.toUpperCase();
 
   // SNOMED codes (blue)
   if (system.includes('SNOMED') || system.includes('SCT_CONST')) {
-    return 'bg-blue-50 text-blue-700 border-blue-200';
+    return 'text-xs bg-blue-50 text-blue-700 border-blue-200';
   }
   // Drug/medication codes (green)
   if (system.includes('SCT_DRGGRP') || system.includes('DRUG')) {
-    return 'bg-green-50 text-green-700 border-green-200';
+    return 'text-xs bg-green-50 text-green-700 border-green-200';
   }
   // EMIS codes (orange)
   if (system.includes('EMIS') || system.includes('EMISINTERNAL')) {
-    return 'bg-orange-50 text-orange-700 border-orange-200';
+    return 'text-xs bg-orange-50 text-orange-700 border-orange-200';
   }
   // Read codes (purple)
   if (system.includes('READ') || system.includes('CTV3')) {
-    return 'bg-purple-50 text-purple-700 border-purple-200';
+    return 'text-xs bg-purple-50 text-purple-700 border-purple-200';
   }
   // ICD codes (pink)
   if (system.includes('ICD')) {
-    return 'bg-pink-50 text-pink-700 border-pink-200';
+    return 'text-xs bg-pink-50 text-pink-700 border-pink-200';
   }
   // OPCS codes (cyan)
   if (system.includes('OPCS')) {
-    return 'bg-cyan-50 text-cyan-700 border-cyan-200';
+    return 'text-xs bg-cyan-50 text-cyan-700 border-cyan-200';
   }
 
-  return 'bg-gray-50 text-gray-700 border-gray-200';
+  return 'text-xs bg-gray-50 text-gray-700 border-gray-200';
 };
 
 export default function CodeDisplay({ expandedCodes, report }: CodeDisplayProps) {
@@ -268,7 +270,7 @@ export default function CodeDisplay({ expandedCodes, report }: CodeDisplayProps)
                                         <TableCell className="font-mono text-xs">{oc.originalCode}</TableCell>
                                         <TableCell className="text-sm">{oc.displayName}</TableCell>
                                         <TableCell>
-                                          <Badge variant="outline" className={`text-xs ${getCodeSystemColor(oc.codeSystem)}`}>
+                                          <Badge variant="outline" className={getCodeSystemBadgeClass(oc.codeSystem)}>
                                             {oc.codeSystem}
                                           </Badge>
                                         </TableCell>
@@ -360,7 +362,7 @@ export default function CodeDisplay({ expandedCodes, report }: CodeDisplayProps)
                                         <TableCell className="font-mono text-xs">{failed.originalCode}</TableCell>
                                         <TableCell className="text-sm">{failed.displayName}</TableCell>
                                         <TableCell>
-                                          <Badge variant="outline" className={`text-xs ${getCodeSystemColor(failed.codeSystem)}`}>
+                                          <Badge variant="outline" className={getCodeSystemBadgeClass(failed.codeSystem)}>
                                             {failed.codeSystem}
                                           </Badge>
                                         </TableCell>
