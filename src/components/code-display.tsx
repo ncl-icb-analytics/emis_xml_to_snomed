@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Copy, Check, Download, ChevronDown, ChevronRight, CheckCircle2, XCircle } from 'lucide-react';
+import { Copy, Check, Download, ChevronDown, ChevronRight, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import { ExpandedCodeSet, EmisReport } from '@/lib/types';
 import NormalisedDataView from './normalised-data-view';
 
