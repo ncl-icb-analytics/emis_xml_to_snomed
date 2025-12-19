@@ -1,0 +1,34 @@
+'use client';
+
+import { usePathname } from 'next/navigation';
+import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar';
+import { AppSidebar } from '@/components/app-sidebar';
+
+export default function LayoutWrapper({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const pathname = usePathname();
+  const isLoginPage = pathname === '/login';
+
+  // If on login page, render without sidebar
+  if (isLoginPage) {
+    return <>{children}</>;
+  }
+
+  return (
+    <SidebarProvider style={{ '--sidebar-width': '28rem' } as React.CSSProperties}>
+      <AppSidebar />
+      <SidebarInset className="flex flex-col">
+        <header className="flex h-14 shrink-0 items-center border-b bg-background">
+          {/* Header reserved for future navigation elements and logo */}
+        </header>
+        <main className="flex-1 overflow-auto">
+          {children}
+        </main>
+      </SidebarInset>
+    </SidebarProvider>
+  );
+}
+
