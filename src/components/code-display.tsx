@@ -20,6 +20,8 @@ import NormalisedDataView from './normalised-data-view';
 interface CodeDisplayProps {
   expandedCodes: ExpandedCodeSet;
   report?: EmisReport;
+  isExpanding?: boolean;
+  totalValueSets?: number;
 }
 
 const getCodeSystemBadgeClass = (codeSystem?: string): string => {
@@ -49,7 +51,7 @@ const getCodeSystemBadgeClass = (codeSystem?: string): string => {
   return 'text-xs bg-gray-50 text-gray-700 border-gray-200';
 };
 
-export default function CodeDisplay({ expandedCodes, report }: CodeDisplayProps) {
+export default function CodeDisplay({ expandedCodes, report, isExpanding, totalValueSets }: CodeDisplayProps) {
   const [copiedButton, setCopiedButton] = useState<number | 'all' | null>(null);
   const [expandedValueSets, setExpandedValueSets] = useState<Set<number>>(new Set());
   const [copiedItem, setCopiedItem] = useState<string | null>(null);
@@ -176,15 +178,34 @@ export default function CodeDisplay({ expandedCodes, report }: CodeDisplayProps)
 
       {/* Mapping Status Summary */}
       {expandedCodes.valueSetGroups && (() => {
+        const completedValueSets = expandedCodes.valueSetGroups.length;
         const totalFailedCodes = expandedCodes.valueSetGroups.reduce(
           (sum, group) => sum + (group.failedCodes?.length || 0),
           0
         );
-        const totalValueSets = expandedCodes.valueSetGroups.length;
         const failedValueSets = expandedCodes.valueSetGroups.filter(
           group => group.failedCodes && group.failedCodes.length > 0
         ).length;
 
+        // Show progress message while expanding
+        if (isExpanding) {
+          return (
+            <Card className="border-blue-200 bg-blue-50/50">
+              <div className="px-4 py-3 flex items-center gap-2">
+                <Loader2 className="w-5 h-5 text-blue-600 flex-shrink-0 animate-spin" />
+                <div>
+                  <p className="font-semibold text-blue-900">Expanding codes...</p>
+                  <p className="text-sm text-blue-700">
+                    Processing {completedValueSets} of {totalValueSets || completedValueSets} ValueSet{(totalValueSets || completedValueSets) !== 1 ? 's' : ''}
+                    {totalFailedCodes > 0 && ` • ${totalFailedCodes} code${totalFailedCodes !== 1 ? 's' : ''} failed so far`}
+                  </p>
+                </div>
+              </div>
+            </Card>
+          );
+        }
+
+        // Show final status when complete
         return (
           <Card className={totalFailedCodes > 0 ? 'border-orange-200 bg-orange-50/50' : 'border-green-200 bg-green-50/50'}>
             <div className="px-4 py-3 flex items-center gap-2">
@@ -196,7 +217,7 @@ export default function CodeDisplay({ expandedCodes, report }: CodeDisplayProps)
                       {totalFailedCodes} code{totalFailedCodes !== 1 ? 's' : ''} failed to map
                     </p>
                     <p className="text-sm text-orange-700">
-                      {failedValueSets} of {totalValueSets} ValueSet{totalValueSets !== 1 ? 's' : ''} had mapping failures
+                      {failedValueSets} of {completedValueSets} ValueSet{completedValueSets !== 1 ? 's' : ''} had mapping failures
                     </p>
                   </div>
                 </>
@@ -206,7 +227,7 @@ export default function CodeDisplay({ expandedCodes, report }: CodeDisplayProps)
                   <div>
                     <p className="font-semibold text-green-900">All codes successfully mapped</p>
                     <p className="text-sm text-green-700">
-                      All {totalValueSets} ValueSet{totalValueSets !== 1 ? 's' : ''} expanded without errors
+                      All {completedValueSets} ValueSet{completedValueSets !== 1 ? 's' : ''} expanded without errors
                     </p>
                   </div>
                 </>

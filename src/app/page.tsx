@@ -292,7 +292,12 @@ export default function HomePage() {
                 </CardContent>
               </Card>
             ) : (
-              <CodeDisplay expandedCodes={expandedData} report={selectedReport} />
+              <CodeDisplay
+                expandedCodes={expandedData}
+                report={selectedReport}
+                isExpanding={isExpanding}
+                totalValueSets={selectedReport?.valueSets.length}
+              />
             )}
           </>
         )}
