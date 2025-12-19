@@ -1,11 +1,23 @@
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
-import { randomUUID } from 'crypto';
 import {
   EmisXmlDocument,
   EmisReport,
   EmisValueSet,
   EmisValue,
 } from './types';
+
+// Use browser crypto API if available, fallback to simple UUID for Node.js
+const generateUUID = (): string => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  // Fallback for environments without crypto.randomUUID
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+};
 
 const NAMESPACE = 'http://www.e-mis.com/emisopen';
 
@@ -224,7 +236,7 @@ export async function parseEmisXml(
         .filter((vs) => vs.values.length > 0); // Filter empty valueSets
 
       return {
-        id: randomUUID(),
+        id: generateUUID(),
         name,
         searchName,
         rule,

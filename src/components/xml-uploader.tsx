@@ -4,7 +4,7 @@ import { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { Upload, FileText, Loader2, X } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { ParseXmlResponse } from '@/lib/types';
+import { parseEmisXml } from '@/lib/xml-parser';
 import { Button } from '@/components/ui/button';
 
 export default function XmlUploader() {
@@ -21,32 +21,15 @@ export default function XmlUploader() {
       setIsProcessing(true);
 
       try {
-        // Use FormData instead of JSON to avoid body size limits
-        const formData = new FormData();
-        formData.append('xmlFile', file);
-
-        const response = await fetch('/api/xml/parse', {
-          method: 'POST',
-          body: formData,
-        });
-
-        if (!response.ok) {
-          const text = await response.text();
-          console.error('API error response:', text);
-          throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
-        }
-
-        const result: ParseXmlResponse = await response.json();
-
-        if (!result.success || !result.data) {
-          throw new Error(result.error || 'Failed to parse XML');
-        }
+        // Parse XML client-side to avoid upload size limits
+        const xmlContent = await file.text();
+        const parsedData = await parseEmisXml(xmlContent);
 
         window.dispatchEvent(
-          new CustomEvent('xml-parsed', { detail: result.data })
+          new CustomEvent('xml-parsed', { detail: parsedData })
         );
 
-        if (result.data.reports.length === 0) {
+        if (parsedData.reports.length === 0) {
           toast({
             variant: 'destructive',
             title: 'No Searches Found',
@@ -55,7 +38,7 @@ export default function XmlUploader() {
         } else {
           toast({
             title: 'Success',
-            description: `Loaded ${result.data.reports.length} searches`,
+            description: `Loaded ${parsedData.reports.length} searches`,
           });
         }
       } catch (error) {
