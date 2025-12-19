@@ -206,9 +206,13 @@ export default function CodeDisplay({ expandedCodes, report }: CodeDisplayProps)
                     </TableCell>
                     <TableCell>
                       {group.failedCodes && group.failedCodes.length > 0 ? (
-                        <XCircle className="w-4 h-4 text-orange-600" title={`${group.failedCodes.length} code(s) failed to map`} />
+                        <div title={`${group.failedCodes.length} code(s) failed to map`}>
+                          <XCircle className="w-4 h-4 text-orange-600" />
+                        </div>
                       ) : (
-                        <CheckCircle2 className="w-4 h-4 text-green-600" title="All codes mapped successfully" />
+                        <div title="All codes mapped successfully">
+                          <CheckCircle2 className="w-4 h-4 text-green-600" />
+                        </div>
                       )}
                     </TableCell>
                     <TableCell>
