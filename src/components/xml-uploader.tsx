@@ -30,6 +30,12 @@ export default function XmlUploader() {
           body: formData,
         });
 
+        if (!response.ok) {
+          const text = await response.text();
+          console.error('API error response:', text);
+          throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
+        }
+
         const result: ParseXmlResponse = await response.json();
 
         if (!result.success || !result.data) {
