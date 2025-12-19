@@ -197,9 +197,9 @@ export default function CodeDisplay({ expandedCodes, report }: CodeDisplayProps)
                       )}
                     </TableCell>
                     <TableCell>
-                      <div className="flex flex-col gap-0.5">
+                      <div className="flex items-center gap-2">
                         <span className="font-medium text-sm">{group.valueSetFriendlyName}</span>
-                        <Badge variant="outline" className="font-mono text-xs w-fit bg-purple-50 text-purple-700 border-purple-200">
+                        <Badge variant="outline" className="font-mono text-xs bg-purple-50 text-purple-700 border-purple-200">
                           {group.valueSetUniqueName}
                         </Badge>
                       </div>
