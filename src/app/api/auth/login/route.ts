@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const APP_PASSWORD = process.env.APP_PASSWORD || 'EmisToSnomed2024!';
+const APP_PASSWORD = process.env.APP_PASSWORD;
 
 export async function POST(request: NextRequest) {
   try {
