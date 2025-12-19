@@ -60,22 +60,30 @@ export default function HomePage() {
     setIsExpanding(true);
 
     try {
-      const parentCodes: string[] = [];
-      const displayNames: string[] = [];
-      const includeChildren: boolean[] = [];
-      const isRefset: boolean[] = [];
-      const codeSystems: string[] = [];
-      const excludedCodes: string[] = [];
-      const valueSetMapping: Array<{
-        valueSetId: string;
-        valueSetIndex: number;
-        codeIndices: number[];
-        excludedCodes: string[];
-      }> = [];
+      // Initialize expandedData with empty valueSetGroups
+      const initialData: ExpandedCodeSet = {
+        featureId: selectedReport.id,
+        featureName: selectedReport.name,
+        concepts: [],
+        totalCount: 0,
+        sqlFormattedCodes: '',
+        expandedAt: new Date().toISOString(),
+        valueSetGroups: [],
+      };
+      setExpandedData(initialData);
 
-      let codeIndex = 0;
-      selectedReport.valueSets.forEach((vs, vsIndex) => {
-        const codeIndices: number[] = [];
+      // Process each valueSet sequentially with separate API calls
+      const allConcepts = new Map<string, any>();
+
+      for (let vsIndex = 0; vsIndex < selectedReport.valueSets.length; vsIndex++) {
+        const vs = selectedReport.valueSets[vsIndex];
+
+        // Build data for this specific valueSet
+        const parentCodes: string[] = [];
+        const displayNames: string[] = [];
+        const includeChildren: boolean[] = [];
+        const isRefset: boolean[] = [];
+        const codeSystems: string[] = [];
         const vsExcludedCodes: string[] = [];
 
         vs.values.forEach((v) => {
@@ -84,56 +92,71 @@ export default function HomePage() {
           includeChildren.push(v.includeChildren);
           isRefset.push(v.isRefset || false);
           codeSystems.push(vs.codeSystem || 'EMISINTERNAL');
-          codeIndices.push(codeIndex);
-          codeIndex++;
         });
 
         vs.exceptions.forEach((e) => {
-          excludedCodes.push(e.code);
           vsExcludedCodes.push(e.code);
         });
 
-        valueSetMapping.push({
+        const valueSetMapping = [{
           valueSetId: vs.id,
           valueSetIndex: vsIndex,
-          codeIndices,
+          codeIndices: parentCodes.map((_, idx) => idx),
           excludedCodes: vsExcludedCodes,
+        }];
+
+        // Make API call for this single valueSet
+        const response = await fetch('/api/terminology/expand', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            featureId: selectedReport.id,
+            featureName: selectedReport.name,
+            parentCodes,
+            displayNames,
+            excludedCodes: vsExcludedCodes,
+            includeChildren,
+            isRefset,
+            codeSystems,
+            valueSetMapping,
+          }),
         });
-      });
 
-      const response = await fetch('/api/terminology/expand', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          featureId: selectedReport.id,
-          featureName: selectedReport.name,
-          parentCodes,
-          displayNames,
-          excludedCodes,
-          includeChildren,
-          isRefset,
-          codeSystems,
-          valueSetMapping,
-        }),
-      });
+        const result = await response.json();
 
-      const result = await response.json();
+        if (result.success && result.data && result.data.valueSetGroups) {
+          // Add concepts to global map
+          result.data.valueSetGroups[0]?.concepts.forEach((concept: any) => {
+            if (!allConcepts.has(concept.code)) {
+              allConcepts.set(concept.code, concept);
+            }
+          });
 
-      if (!result.success || !result.data) {
-        const errorMessage = result.error || 'Failed to expand codes';
-        setExpandedData({
-          featureId: selectedReport.id,
-          featureName: selectedReport.name,
-          concepts: [],
-          totalCount: 0,
-          sqlFormattedCodes: '',
-          expandedAt: new Date().toISOString(),
-          error: errorMessage,
-        });
-        return;
+          // Update expandedData with this completed valueSet
+          setExpandedData(prev => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              valueSetGroups: [...(prev.valueSetGroups || []), result.data.valueSetGroups[0]],
+              concepts: Array.from(allConcepts.values()),
+              totalCount: allConcepts.size,
+            };
+          });
+        }
       }
 
-      setExpandedData(result.data);
+      // Final update with all concepts
+      setExpandedData(prev => {
+        if (!prev) return prev;
+        const concepts = Array.from(allConcepts.values());
+        return {
+          ...prev,
+          concepts,
+          totalCount: concepts.length,
+          sqlFormattedCodes: `(${concepts.map(c => `'${c.code}'`).join(', ')})`,
+        };
+      });
+
     } catch (err) {
       console.error('Expansion error:', err);
       const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
