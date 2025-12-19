@@ -6,17 +6,55 @@ import {
   EmisValue,
 } from './types';
 
-// Use browser crypto API if available, fallback to simple UUID for Node.js
-const generateUUID = (): string => {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return crypto.randomUUID();
+// Better hash function to avoid collisions
+const hashString = (str: string): string => {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
   }
-  // Fallback for environments without crypto.randomUUID
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
+
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+
+  const hash = (h2 >>> 0).toString(36).padStart(7, '0') + (h1 >>> 0).toString(36).padStart(7, '0');
+  return hash;
+};
+
+// Generate deterministic ID based on report characteristics
+const generateDeterministicId = (
+  name: string,
+  searchName: string,
+  rule: string,
+  valueSets: any[],
+  reportIndex: number
+): string => {
+  // Create a detailed string representation of the report's characteristics
+  const valueSetsSummary = valueSets.map((vs, idx) => {
+    const valueDetails = vs.values?.map((v: any) =>
+      `${v.code}:${v.includeChildren || false}:${v.isRefset || false}:${v.displayName || ''}`
+    ).sort().join(',') || '';
+    const exceptions = vs.exceptions?.map((e: any) => e.code || e).sort().join(',') || '';
+    return `${idx}:${vs.codeSystem || ''}:[${valueDetails}]:[${exceptions}]`;
+  }).join('|');
+
+  // Include reportIndex to ensure uniqueness even for identical reports
+  const content = `${reportIndex}::${name}::${searchName}::${rule}::${valueSetsSummary}`;
+  const hash = hashString(content);
+
+  // Format as a UUID-like string for consistency
+  const hash1 = hash.substring(0, 8);
+  const hash2 = hash.substring(8, 12);
+  const hash3 = hash.substring(12, 16);
+  const hash4 = hashString(content + 'a').substring(0, 4);
+  const hash5 = hashString(content + 'b').substring(0, 12);
+
+  return `${hash1}-${hash2}-${hash3}-${hash4}-${hash5}`;
 };
 
 const NAMESPACE = 'http://www.e-mis.com/emisopen';
@@ -156,7 +194,7 @@ export async function parseEmisXml(
   }
 
   const processedReports: EmisReport[] = reports
-    .map((report: any, index: number) => {
+    .map((report: any, reportIndex: number) => {
       const name = report.name || '';
       const searchName = extractSearchName(name);
 
@@ -236,7 +274,7 @@ export async function parseEmisXml(
         .filter((vs) => vs.values.length > 0); // Filter empty valueSets
 
       return {
-        id: generateUUID(),
+        id: generateDeterministicId(name, searchName, rule, valueSets, reportIndex),
         name,
         searchName,
         rule,
@@ -379,8 +417,16 @@ function parseValueSet(valueSet: any, index: number): EmisValueSet {
   // This allows us to track the original code system from the XML file
   const codeSystem = valueSet.codeSystem || undefined;
 
+  // Check if the XML has an id attribute (with or without @ prefix from parser)
+  const xmlId = valueSet['@_id'] || valueSet.id || undefined;
+
+  // Log to check if XML has IDs
+  if (Math.random() < 0.05) {
+    console.log('ValueSet XML keys:', Object.keys(valueSet), 'xmlId:', xmlId);
+  }
+
   return {
-    id: `valueset-${index}`,
+    id: xmlId || `valueset-${index}`,
     codeSystem,
     values: valuesArray.map((v: any) => parseValue(v)).filter((v): v is EmisValue => v !== null),
     exceptions: exceptionsArray
