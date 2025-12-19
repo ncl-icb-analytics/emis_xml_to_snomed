@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Copy, Check, Download, ChevronDown, ChevronRight } from 'lucide-react';
+import { Copy, Check, Download, ChevronDown, ChevronRight, CheckCircle2, XCircle } from 'lucide-react';
 import { ExpandedCodeSet, EmisReport } from '@/lib/types';
 import NormalisedDataView from './normalised-data-view';
 
@@ -180,6 +180,7 @@ export default function CodeDisplay({ expandedCodes, report }: CodeDisplayProps)
           <TableHeader>
             <TableRow>
               <TableHead className="w-12"></TableHead>
+              <TableHead className="w-12">Status</TableHead>
               <TableHead>ValueSet Name</TableHead>
               <TableHead>Hash</TableHead>
               <TableHead className="text-right">XML</TableHead>
@@ -201,6 +202,13 @@ export default function CodeDisplay({ expandedCodes, report }: CodeDisplayProps)
                         <ChevronDown className="w-4 h-4" />
                       ) : (
                         <ChevronRight className="w-4 h-4" />
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {group.failedCodes && group.failedCodes.length > 0 ? (
+                        <XCircle className="w-4 h-4 text-orange-600" title={`${group.failedCodes.length} code(s) failed to map`} />
+                      ) : (
+                        <CheckCircle2 className="w-4 h-4 text-green-600" title="All codes mapped successfully" />
                       )}
                     </TableCell>
                     <TableCell>
@@ -268,7 +276,7 @@ export default function CodeDisplay({ expandedCodes, report }: CodeDisplayProps)
 
                   {isExpanded && (
                     <TableRow>
-                      <TableCell colSpan={6} className="p-0">
+                      <TableCell colSpan={7} className="p-0">
                         <div className="bg-muted/30 p-4 space-y-4">
                           {/* Input Codes Table */}
                           {group.originalCodes && group.originalCodes.length > 0 && (
