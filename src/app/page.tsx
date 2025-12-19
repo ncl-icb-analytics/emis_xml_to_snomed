@@ -6,6 +6,7 @@ import CodeDisplay from '@/components/code-display';
 import { Button } from '@/components/ui/button';
 import { Loader2, FileText, AlertCircle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
+import { hasParsedXmlData } from '@/lib/storage';
 
 export default function HomePage() {
   const [selectedReport, setSelectedReport] = useState<EmisReport | null>(null);
@@ -13,12 +14,13 @@ export default function HomePage() {
   const [isExpanding, setIsExpanding] = useState(false);
   const [hasXmlLoaded, setHasXmlLoaded] = useState(false);
 
-  // Check if XML is already loaded in sessionStorage on mount
+  // Check if XML is already loaded in IndexedDB on mount
   useEffect(() => {
-    const compressed = sessionStorage.getItem('parsedXmlData');
-    if (compressed) {
-      setHasXmlLoaded(true);
-    }
+    hasParsedXmlData().then((hasData) => {
+      if (hasData) {
+        setHasXmlLoaded(true);
+      }
+    });
   }, []);
 
   useEffect(() => {

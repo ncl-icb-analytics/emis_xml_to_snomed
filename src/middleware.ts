@@ -23,6 +23,11 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // Allow access to internal API routes (called from authenticated client-side code)
+  if (pathname.startsWith('/api/xml/parse') || pathname.startsWith('/api/terminology/expand')) {
+    return NextResponse.next();
+  }
+
   // Check if user is authenticated
   const authToken = request.cookies.get('auth-token');
 
@@ -39,10 +44,11 @@ export function middleware(request: NextRequest) {
 export const config = {
   matcher: [
     /*
-     * Match all request paths - simplest pattern to ensure middleware runs
-     * We'll handle exclusions in the middleware function itself
+     * Match all request paths EXCEPT API routes
+     * API routes (especially /api/xml/parse) need to bypass middleware
+     * to avoid body size limits being applied
      */
-    '/:path*',
+    '/((?!api|_next/static|_next/image|favicon.ico).*)',
   ],
 };
 

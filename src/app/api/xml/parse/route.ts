@@ -4,16 +4,18 @@ import { ParseXmlRequest, ParseXmlResponse } from '@/lib/types';
 
 export async function POST(request: NextRequest) {
   try {
-    const body: ParseXmlRequest = await request.json();
-    const { xmlContent } = body;
+    // Handle FormData upload instead of JSON to avoid body size limits
+    const formData = await request.formData();
+    const xmlFile = formData.get('xmlFile') as File | null;
 
-    if (!xmlContent) {
+    if (!xmlFile) {
       return NextResponse.json<ParseXmlResponse>(
-        { success: false, error: 'No XML content provided' },
+        { success: false, error: 'No XML file provided' },
         { status: 400 }
       );
     }
 
+    const xmlContent = await xmlFile.text();
     const parsedData = await parseEmisXml(xmlContent);
 
     return NextResponse.json<ParseXmlResponse>({
@@ -34,3 +36,4 @@ export async function POST(request: NextRequest) {
 
 export const runtime = 'nodejs';
 export const maxDuration = 30;
+// Body size limit is configured in next.config.ts via middlewareClientMaxBodySize

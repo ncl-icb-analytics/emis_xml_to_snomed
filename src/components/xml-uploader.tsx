@@ -21,12 +21,13 @@ export default function XmlUploader() {
       setIsProcessing(true);
 
       try {
-        const xmlContent = await file.text();
+        // Use FormData instead of JSON to avoid body size limits
+        const formData = new FormData();
+        formData.append('xmlFile', file);
 
         const response = await fetch('/api/xml/parse', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ xmlContent }),
+          body: formData,
         });
 
         const result: ParseXmlResponse = await response.json();

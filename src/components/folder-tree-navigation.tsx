@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import LZString from 'lz-string';
 import { Input } from '@/components/ui/input';
+import { loadParsedXmlData, saveParsedXmlData, clearParsedXmlData } from '@/lib/storage';
 import {
   ChevronRight,
   Folder,
@@ -37,19 +37,15 @@ export default function FolderTreeNavigation() {
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    try {
-      const compressed = sessionStorage.getItem('parsedXmlData');
-      if (compressed) {
-        const jsonString = LZString.decompressFromUTF16(compressed);
-        if (jsonString) {
-          const minimalData = JSON.parse(jsonString);
+    loadParsedXmlData()
+      .then((minimalData) => {
+        if (minimalData) {
           setParsedData(minimalData);
         }
-      }
-    } catch (e) {
-      console.error('Failed to load stored data:', e);
-      sessionStorage.removeItem('parsedXmlData');
-    }
+      })
+      .catch((error) => {
+        console.error('Failed to load stored data:', error);
+      });
   }, []);
 
   useEffect(() => {
@@ -89,12 +85,10 @@ export default function FolderTreeNavigation() {
           reports: minimalReports,
         };
 
-        const jsonString = JSON.stringify(minimalData);
-        const compressed = LZString.compressToUTF16(jsonString);
-
-        if (compressed.length < 4 * 1024 * 1024) {
-          sessionStorage.setItem('parsedXmlData', compressed);
-        }
+        // Save to IndexedDB (handles large files much better than sessionStorage)
+        saveParsedXmlData(minimalData).catch((error) => {
+          console.error('Failed to save parsed XML data:', error);
+        });
       } catch (error) {
         console.error('Error storing parsed XML data:', error);
       }
@@ -109,7 +103,9 @@ export default function FolderTreeNavigation() {
       setCurrentPath([]);
       setSelectedReportId(null);
       setExpandedFolders(new Set());
-      sessionStorage.removeItem('parsedXmlData');
+      clearParsedXmlData().catch((error) => {
+        console.error('Failed to clear stored data:', error);
+      });
     };
 
     window.addEventListener('xml-parsed', handleXmlParsed);

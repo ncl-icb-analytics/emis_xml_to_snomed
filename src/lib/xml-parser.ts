@@ -1,4 +1,4 @@
-import { XMLParser } from 'fast-xml-parser';
+import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import { randomUUID } from 'crypto';
 import {
   EmisXmlDocument,
@@ -16,7 +16,9 @@ const parserOptions = {
   parseAttributeValue: true,
   trimValues: true,
   ignoreNameSpace: false,
-  removeNSPrefix: true, // This will remove namespace prefixes
+  removeNSPrefix: true,
+  processEntities: true,
+  allowBooleanAttributes: true,
 };
 
 const IGNORED_VALUES = [
@@ -37,8 +39,40 @@ const IGNORED_VALUES = [
 export async function parseEmisXml(
   xmlContent: string
 ): Promise<EmisXmlDocument> {
+  if (!xmlContent || typeof xmlContent !== 'string') {
+    throw new Error('Invalid XML content: expected non-empty string');
+  }
+
+  // Validate XML structure first
+  const validationResult = XMLValidator.validate(xmlContent, {
+    allowBooleanAttributes: true,
+  });
+
+  if (validationResult !== true) {
+    console.error('XML validation failed:', validationResult);
+    throw new Error(`Invalid XML: ${validationResult.err.msg} at line ${validationResult.err.line}`);
+  }
+
+  console.log('XML validation passed, parsing...');
+
   const parser = new XMLParser(parserOptions);
-  const parsed = parser.parse(xmlContent);
+  let parsed;
+
+  try {
+    parsed = parser.parse(xmlContent);
+    console.log('XML parsed successfully');
+  } catch (error) {
+    console.error('XML parsing failed with error:', error);
+    console.error('Error details:', {
+      message: error instanceof Error ? error.message : 'Unknown',
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    throw new Error(`XML parsing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+
+  if (!parsed) {
+    throw new Error('XML parsing returned undefined');
+  }
 
   // The root element is enquiryDocument, not root
   const enquiryDoc = parsed.enquiryDocument || parsed;

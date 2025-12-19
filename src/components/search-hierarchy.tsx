@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import LZString from 'lz-string';
+import { loadParsedXmlData, clearParsedXmlData } from '@/lib/storage';
 import {
   Card,
   CardContent,
@@ -27,41 +27,33 @@ export default function SearchHierarchy() {
     new Set()
   );
 
-  // Load from sessionStorage on mount (compressed minimal data)
+  // Load from IndexedDB on mount
   useEffect(() => {
-    const compressed = sessionStorage.getItem('parsedXmlData');
-    if (compressed) {
-      try {
-        // Decompress the data
-        const jsonString = LZString.decompressFromUTF16(compressed);
-        if (!jsonString) {
-          console.warn('Failed to decompress stored data');
-          return;
+    loadParsedXmlData()
+      .then((minimalData) => {
+        if (minimalData) {
+          // Reconstruct displayNames (use code as fallback)
+          if (minimalData.reports) {
+            minimalData.reports.forEach((report: any) => {
+              if (report.valueSets) {
+                report.valueSets.forEach((vs: any) => {
+                  if (vs.values) {
+                    vs.values.forEach((v: any) => {
+                      v.displayName = v.displayName || v.code;
+                    });
+                  }
+                });
+              }
+            });
+          }
+          
+          setParsedData(minimalData);
+          groupReportsIntoRules(minimalData);
         }
-        
-        const minimalData = JSON.parse(jsonString);
-        
-        // Reconstruct displayNames (use code as fallback)
-        if (minimalData.reports) {
-          minimalData.reports.forEach((report: any) => {
-            if (report.valueSets) {
-              report.valueSets.forEach((vs: any) => {
-                if (vs.values) {
-                  vs.values.forEach((v: any) => {
-                    v.displayName = v.displayName || v.code;
-                  });
-                }
-              });
-            }
-          });
-        }
-        
-        setParsedData(minimalData);
-        groupReportsIntoRules(minimalData);
-      } catch (e) {
-        console.error('Failed to load stored data:', e);
-      }
-    }
+      })
+      .catch((error) => {
+        console.error('Failed to load stored data:', error);
+      });
   }, []);
 
   const groupReportsIntoRules = (data: EmisXmlDocument) => {
