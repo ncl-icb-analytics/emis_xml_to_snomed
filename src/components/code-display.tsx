@@ -52,11 +52,18 @@ const getCodeSystemBadgeClass = (codeSystem?: string): string => {
 export default function CodeDisplay({ expandedCodes, report }: CodeDisplayProps) {
   const [copiedButton, setCopiedButton] = useState<number | 'all' | null>(null);
   const [expandedValueSets, setExpandedValueSets] = useState<Set<number>>(new Set());
+  const [copiedItem, setCopiedItem] = useState<string | null>(null);
 
   const handleCopy = async (codesText: string, buttonId: number | 'all') => {
     await navigator.clipboard.writeText(codesText);
     setCopiedButton(buttonId);
     setTimeout(() => setCopiedButton(null), 2000);
+  };
+
+  const handleCopyItem = async (text: string, itemId: string) => {
+    await navigator.clipboard.writeText(text);
+    setCopiedItem(itemId);
+    setTimeout(() => setCopiedItem(null), 2000);
   };
 
   const toggleValueSet = (index: number) => {
@@ -198,10 +205,43 @@ export default function CodeDisplay({ expandedCodes, report }: CodeDisplayProps)
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        <span className="font-medium text-sm">{group.valueSetFriendlyName}</span>
-                        <Badge variant="outline" className="font-mono text-xs bg-purple-50 text-purple-700 border-purple-200">
-                          {group.valueSetUniqueName}
-                        </Badge>
+                        <div
+                          className="group flex items-center gap-1 cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCopyItem(group.valueSetFriendlyName, `name-${idx}`);
+                          }}
+                          title="Click to copy name"
+                        >
+                          <span className="font-medium text-sm group-hover:text-primary transition-colors">
+                            {group.valueSetFriendlyName}
+                          </span>
+                          {copiedItem === `name-${idx}` ? (
+                            <Check className="w-3 h-3 text-green-600" />
+                          ) : (
+                            <Copy className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground" />
+                          )}
+                        </div>
+                        <div
+                          className="group cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCopyItem(group.valueSetUniqueName, `id-${idx}`);
+                          }}
+                          title="Click to copy ID"
+                        >
+                          <Badge
+                            variant="outline"
+                            className="font-mono text-xs bg-purple-50 text-purple-700 border-purple-200 group-hover:bg-purple-100 transition-colors inline-flex items-center gap-1"
+                          >
+                            {group.valueSetUniqueName}
+                            {copiedItem === `id-${idx}` ? (
+                              <Check className="w-3 h-3 text-green-600" />
+                            ) : (
+                              <Copy className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+                            )}
+                          </Badge>
+                        </div>
                       </div>
                     </TableCell>
                     <TableCell>
