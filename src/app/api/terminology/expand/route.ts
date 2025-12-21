@@ -292,8 +292,8 @@ export async function POST(request: NextRequest) {
         const xmlCodes = vsOriginalParentCodes.sort();
         const valueSetHash = generateValueSetHash(xmlCodes);
         const valueSetFriendlyName = generateValueSetFriendlyName(featureName, mapping.valueSetIndex);
-        // Generate UUID to use as valueset ID
-        const valueSetId = generateValueSetId();
+        // Generate deterministic ID based on report ID, valueset index, and valueset hash
+        const valueSetId = generateValueSetId(featureId, valueSetHash, mapping.valueSetIndex);
 
         valueSetGroups.push({
           valueSetId,

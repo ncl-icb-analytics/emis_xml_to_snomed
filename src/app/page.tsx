@@ -3,12 +3,15 @@
 import { useState, useEffect } from 'react';
 import { EmisReport, ExpandedCodeSet } from '@/lib/types';
 import CodeDisplay from '@/components/code-display';
+import BatchExtractor from '@/components/batch-extractor';
 import { Button } from '@/components/ui/button';
 import { Loader2, FileText, AlertCircle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { hasParsedXmlData } from '@/lib/storage';
+import { useAppMode } from '@/contexts/AppModeContext';
 
 export default function HomePage() {
+  const { mode } = useAppMode();
   const [selectedReport, setSelectedReport] = useState<EmisReport | null>(null);
   const [expandedData, setExpandedData] = useState<ExpandedCodeSet | null>(null);
   const [isExpanding, setIsExpanding] = useState(false);
@@ -174,6 +177,13 @@ export default function HomePage() {
     }
   };
 
+  // Extract mode - show batch extractor
+  if (mode === 'extract') {
+    return <BatchExtractor />;
+  }
+
+  // EXPLORE MODE BELOW
+
   // Empty state when no XML loaded
   if (!hasXmlLoaded) {
     return (
@@ -237,10 +247,10 @@ export default function HomePage() {
 
   // Report selected view
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-6 w-full max-w-full min-w-0">
         {/* Breadcrumbs */}
         {breadcrumbs.length > 0 && (
-          <nav className="flex text-sm text-muted-foreground">
+          <nav className="flex flex-wrap text-sm text-muted-foreground">
             {breadcrumbs.map((segment, index) => (
               <div key={index} className="flex items-center">
                 {index > 0 && <span className="mx-2">/</span>}
@@ -252,9 +262,9 @@ export default function HomePage() {
           </nav>
         )}
 
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-2xl font-bold">{selectedReport.searchName}</h2>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-2xl font-bold truncate">{selectedReport.searchName}</h2>
             <p className="text-sm text-muted-foreground mt-1">
               {selectedReport.valueSets.length} ValueSet{selectedReport.valueSets.length !== 1 ? 's' : ''}
             </p>
@@ -263,6 +273,7 @@ export default function HomePage() {
             onClick={handleExpandReport}
             disabled={isExpanding || !!expandedData}
             size="lg"
+            className="flex-shrink-0 w-full sm:w-auto"
           >
             {isExpanding ? (
               <>

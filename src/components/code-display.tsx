@@ -132,13 +132,13 @@ export default function CodeDisplay({ expandedCodes, report, isExpanding, totalV
   };
 
   return (
-    <Tabs defaultValue="expanded" className="space-y-4">
-      <TabsList>
-        <TabsTrigger value="expanded">Expanded Codes</TabsTrigger>
-        <TabsTrigger value="normalised">Normalised Data</TabsTrigger>
+    <Tabs defaultValue="expanded" className="space-y-4 w-full max-w-full min-w-0">
+      <TabsList className="w-full sm:w-auto">
+        <TabsTrigger value="expanded" className="flex-1 sm:flex-none">Expanded Codes</TabsTrigger>
+        <TabsTrigger value="normalised" className="flex-1 sm:flex-none">Normalised Data</TabsTrigger>
       </TabsList>
 
-      <TabsContent value="expanded" className="space-y-4">
+      <TabsContent value="expanded" className="space-y-4 w-full max-w-full min-w-0">
         {/* Summary */}
         <Card className="p-4">
         <div className="flex items-center justify-between">
@@ -497,10 +497,10 @@ export default function CodeDisplay({ expandedCodes, report, isExpanding, totalV
       </Card>
       </TabsContent>
 
-      <TabsContent value="normalised">
+      <TabsContent value="normalised" className="w-full max-w-full min-w-0">
         {report ? (
-          <NormalisedDataView 
-            report={report} 
+          <NormalisedDataView
+            report={report}
             expandedCodes={expandedCodes}
           />
         ) : (

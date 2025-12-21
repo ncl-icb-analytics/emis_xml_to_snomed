@@ -147,7 +147,7 @@ export async function parseEmisXml(
   // Function to build full folder path
   const buildFolderPath = (folderId: string): string => {
     const folder = folderMap.get(folderId);
-    if (!folder) return 'Uncategorized';
+    if (!folder) return 'Uncategorised';
 
     // Build path by traversing up the parent hierarchy
     const path: string[] = [];
@@ -200,7 +200,7 @@ export async function parseEmisXml(
 
       // Get the full folder path from the folder ID
       const folderId = report.folder;
-      const rule = folderId ? buildFolderPath(folderId) : 'Uncategorized';
+      const rule = folderId ? buildFolderPath(folderId) : 'Uncategorised';
 
       // In EMIS XML, the report contains a population > criteriaGroup > definition > criteria > criterion
       // Each criterion has filterAttribute > columnValue > valueSet

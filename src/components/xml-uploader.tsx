@@ -1,16 +1,44 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { Upload, FileText, Loader2, X } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { parseEmisXml } from '@/lib/xml-parser';
 import { Button } from '@/components/ui/button';
+import { hasParsedXmlData, clearParsedXmlData } from '@/lib/storage';
 
 export default function XmlUploader() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [hasStoredData, setHasStoredData] = useState(false);
   const { toast } = useToast();
+
+  // Check for stored data on mount
+  useEffect(() => {
+    hasParsedXmlData().then((hasData) => {
+      setHasStoredData(hasData);
+    });
+  }, []);
+
+  // Listen for xml-parsed and xml-cleared events
+  useEffect(() => {
+    const handleXmlParsed = () => {
+      setHasStoredData(true);
+    };
+
+    const handleXmlCleared = () => {
+      setHasStoredData(false);
+    };
+
+    window.addEventListener('xml-parsed', handleXmlParsed);
+    window.addEventListener('xml-cleared', handleXmlCleared);
+
+    return () => {
+      window.removeEventListener('xml-parsed', handleXmlParsed);
+      window.removeEventListener('xml-cleared', handleXmlCleared);
+    };
+  }, []);
 
   const onDrop = useCallback(
     async (acceptedFiles: File[]) => {
@@ -64,9 +92,11 @@ export default function XmlUploader() {
     disabled: isProcessing,
   });
 
-  const handleClear = (e: React.MouseEvent) => {
+  const handleClear = async (e: React.MouseEvent) => {
     e.stopPropagation();
     setFileName(null);
+    setHasStoredData(false);
+    await clearParsedXmlData();
     window.dispatchEvent(new CustomEvent('xml-cleared'));
   };
 
@@ -88,11 +118,13 @@ export default function XmlUploader() {
             <Loader2 className="h-4 w-4 animate-spin" />
             <span className="text-xs">Processing...</span>
           </div>
-        ) : fileName ? (
+        ) : fileName || hasStoredData ? (
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 flex-1 min-w-0">
               <FileText className="h-4 w-4 text-primary flex-shrink-0" />
-              <span className="text-xs font-medium truncate">{fileName}</span>
+              <span className="text-xs font-medium truncate">
+                {fileName || 'Loaded from storage'}
+              </span>
             </div>
             <Button
               variant="ghost"

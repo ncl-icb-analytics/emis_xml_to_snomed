@@ -1,0 +1,78 @@
+'use client';
+
+import React, { createContext, useContext, useState, useCallback } from 'react';
+
+export type AppMode = 'explore' | 'extract';
+
+interface AppModeContextType {
+  mode: AppMode;
+  setMode: (mode: AppMode) => void;
+  selectedReportIds: Set<string>;
+  toggleReportSelection: (reportId: string) => void;
+  selectAllReports: (reportIds: string[]) => void;
+  deselectAllReports: () => void;
+  isReportSelected: (reportId: string) => boolean;
+}
+
+const AppModeContext = createContext<AppModeContextType | undefined>(undefined);
+
+export function AppModeProvider({ children }: { children: React.ReactNode }) {
+  const [mode, setMode] = useState<AppMode>('explore');
+  const [selectedReportIds, setSelectedReportIds] = useState<Set<string>>(new Set());
+
+  const toggleReportSelection = useCallback((reportId: string) => {
+    setSelectedReportIds((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(reportId)) {
+        newSet.delete(reportId);
+      } else {
+        newSet.add(reportId);
+      }
+      return newSet;
+    });
+  }, []);
+
+  const selectAllReports = useCallback((reportIds: string[]) => {
+    setSelectedReportIds(new Set(reportIds));
+  }, []);
+
+  const deselectAllReports = useCallback(() => {
+    setSelectedReportIds(new Set());
+  }, []);
+
+  const isReportSelected = useCallback((reportId: string) => {
+    return selectedReportIds.has(reportId);
+  }, [selectedReportIds]);
+
+  const handleSetMode = useCallback((newMode: AppMode) => {
+    setMode(newMode);
+    // Clear selections when switching to explore mode
+    if (newMode === 'explore') {
+      setSelectedReportIds(new Set());
+    }
+  }, []);
+
+  return (
+    <AppModeContext.Provider
+      value={{
+        mode,
+        setMode: handleSetMode,
+        selectedReportIds,
+        toggleReportSelection,
+        selectAllReports,
+        deselectAllReports,
+        isReportSelected,
+      }}
+    >
+      {children}
+    </AppModeContext.Provider>
+  );
+}
+
+export function useAppMode() {
+  const context = useContext(AppModeContext);
+  if (context === undefined) {
+    throw new Error('useAppMode must be used within an AppModeProvider');
+  }
+  return context;
+}

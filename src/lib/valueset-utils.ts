@@ -142,14 +142,23 @@ export function generateValueSetFriendlyName(
 }
 
 /**
- * Generates a UUID for a valueset
- * This UUID serves as the unique valueset ID
- * Format: uuid
+ * Generates a deterministic ID for a valueset
+ * This ID is based on the report ID, valueset index, and valueset hash to ensure consistency across runs
+ * Format: uuid-like (8-4-4-4-12)
  * Example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
  */
-export function generateValueSetId(): string {
-  // Generate a UUID for guaranteed uniqueness
-  return crypto.randomUUID();
+export function generateValueSetId(reportId: string, valueSetHash: string, valueSetIndex: number): string {
+  // Create deterministic ID from reportId, valueSetIndex, and valueSetHash
+  // Include index to ensure uniqueness even if two valueSets have identical codes
+  const content = `${reportId}::${valueSetIndex}::${valueSetHash}`;
+
+  // Generate SHA-256 hash
+  const hash = crypto.createHash('sha256').update(content).digest('hex');
+
+  // Format as UUID-like string (8-4-4-4-12)
+  const id = `${hash.substring(0, 8)}-${hash.substring(8, 12)}-${hash.substring(12, 16)}-${hash.substring(16, 20)}-${hash.substring(20, 32)}`;
+
+  return id;
 }
 
 /**
