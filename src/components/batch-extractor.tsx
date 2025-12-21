@@ -47,6 +47,7 @@ export default function BatchExtractor() {
   const [elapsedTime, setElapsedTime] = useState(0);
   const [remainingTime, setRemainingTime] = useState<number | null>(null);
   const [totalTime, setTotalTime] = useState<number | null>(null);
+  const [isCheckingXml, setIsCheckingXml] = useState(true);
   const valuesetTimesRef = useRef<number[]>([]);
   const lastRemainingTimeCalcRef = useRef<number | null>(null);
   const startTimeRef = useRef<number | null>(null);
@@ -60,9 +61,11 @@ export default function BatchExtractor() {
         if (minimalData && minimalData.reports) {
           setReports(minimalData.reports);
         }
+        setIsCheckingXml(false);
       })
       .catch((error) => {
         console.error('Failed to load stored data:', error);
+        setIsCheckingXml(false);
       });
   }, []);
 
@@ -430,8 +433,8 @@ export default function BatchExtractor() {
     }
   };
 
-  // No XML loaded
-  if (reports.length === 0) {
+  // No XML loaded (only show after checking)
+  if (!isCheckingXml && reports.length === 0) {
     return (
       <div className="flex items-center justify-center min-h-full p-6">
         <Card className="max-w-md w-full">

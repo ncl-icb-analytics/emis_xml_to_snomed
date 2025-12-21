@@ -14,6 +14,7 @@ export default function ExploreMode() {
   const [expandedData, setExpandedData] = useState<ExpandedCodeSet | null>(null);
   const [isExpanding, setIsExpanding] = useState(false);
   const [hasXmlLoaded, setHasXmlLoaded] = useState(false);
+  const [isCheckingXml, setIsCheckingXml] = useState(true);
 
   // Check if XML is already loaded in IndexedDB on mount
   useEffect(() => {
@@ -21,6 +22,7 @@ export default function ExploreMode() {
       if (hasData) {
         setHasXmlLoaded(true);
       }
+      setIsCheckingXml(false);
     });
   }, []);
 
@@ -137,8 +139,8 @@ export default function ExploreMode() {
     }
   };
 
-  // Empty state when no XML loaded
-  if (!hasXmlLoaded) {
+  // Empty state when no XML loaded (only show after checking)
+  if (!isCheckingXml && !hasXmlLoaded) {
     return (
       <div className="flex items-center justify-center min-h-full p-6">
           <Card className="max-w-2xl w-full">
