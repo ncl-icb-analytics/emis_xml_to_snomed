@@ -128,6 +128,11 @@ export interface ValueSetGroup {
     codeSystem: string;
     reason: string; // Why it failed (e.g., "No translation found", "Not in terminology server")
   }>;
+  // Refset metadata (if this ValueSet contains refsets)
+  refsets?: Array<{
+    refsetId: string;
+    refsetName: string;
+  }>;
   // Original XML metadata for debugging
   originalCodes?: Array<{
     originalCode: string;
@@ -144,7 +149,7 @@ export interface SnomedConcept {
   code: string;
   display: string;
   system: string;
-  source: 'parent' | 'child'; // Track if it's the original code or expanded child
+  source: 'parent' | 'child' | 'rf2_file' | 'terminology_server'; // Track source: original code, expanded child, RF2 file, or terminology server
   excludeChildren?: boolean; // True if includeChildren was false for the parent code
   isRefset?: boolean; // True if this code is a refset ID
 }

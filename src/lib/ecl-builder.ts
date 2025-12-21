@@ -1,5 +1,17 @@
 import { EmisValue } from './types';
 
+/**
+ * Separates values into refsets and non-refsets
+ */
+export function separateRefsets(values: EmisValue[]): {
+  refsets: EmisValue[];
+  nonRefsets: EmisValue[];
+} {
+  const refsets = values.filter((v) => v.isRefset);
+  const nonRefsets = values.filter((v) => !v.isRefset);
+  return { refsets, nonRefsets };
+}
+
 export function buildBatchedEclQuery(
   values: EmisValue[],
   excludedCodes: string[]
@@ -79,6 +91,17 @@ export function buildBatchedEclQuery(
   }
 
   return eclExpression;
+}
+
+/**
+ * Builds an ECL query for non-refset codes only (excludes refsets)
+ */
+export function buildBatchedEclQueryWithoutRefsets(
+  values: EmisValue[],
+  excludedCodes: string[]
+): string {
+  const nonRefsets = values.filter((v) => !v.isRefset);
+  return buildBatchedEclQuery(nonRefsets, excludedCodes);
 }
 
 export function estimateEclComplexity(eclExpression: string): number {

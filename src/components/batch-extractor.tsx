@@ -288,7 +288,7 @@ export default function BatchExtractor() {
                     valueset_id: group.valueSetId,
                     snomed_code: concept.code,
                     display: concept.display,
-                    source: 'terminology_server',
+                    source: concept.source || 'terminology_server', // Use actual source (rf2_file or terminology_server)
                     exclude_children: concept.excludeChildren || false,
                     is_refset: concept.isRefset || false,
                   });

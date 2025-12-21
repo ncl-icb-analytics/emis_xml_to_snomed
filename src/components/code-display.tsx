@@ -361,28 +361,32 @@ export default function CodeDisplay({ expandedCodes, report, isExpanding, totalV
                                 <Table>
                                   <TableHeader>
                                     <TableRow>
-                                      <TableHead className="w-32">Code</TableHead>
-                                      <TableHead>Display</TableHead>
-                                      <TableHead className="w-32">System</TableHead>
-                                      <TableHead className="w-24">Children</TableHead>
-                                      <TableHead className="w-32">Translated Code</TableHead>
-                                      <TableHead>Translated Display</TableHead>
+                                      <TableHead className="w-32 whitespace-nowrap">Code</TableHead>
+                                      <TableHead className="min-w-[150px]">Display</TableHead>
+                                      <TableHead className="w-28 whitespace-nowrap">System</TableHead>
+                                      <TableHead className="w-20 text-center whitespace-nowrap">Is Refset</TableHead>
+                                      <TableHead className="w-20 text-center whitespace-nowrap">Children</TableHead>
+                                      <TableHead className="w-32 whitespace-nowrap">Translated Code</TableHead>
+                                      <TableHead className="min-w-[150px]">Translated Display</TableHead>
                                     </TableRow>
                                   </TableHeader>
                                   <TableBody>
                                     {group.originalCodes.map((oc, i) => (
                                       <TableRow key={i}>
-                                        <TableCell className="font-mono text-xs">{oc.originalCode}</TableCell>
+                                        <TableCell className="font-mono text-xs whitespace-nowrap">{oc.originalCode}</TableCell>
                                         <TableCell className="text-sm">{oc.displayName}</TableCell>
-                                        <TableCell>
+                                        <TableCell className="whitespace-nowrap">
                                           <Badge variant="outline" className={getCodeSystemBadgeClass(oc.codeSystem)}>
                                             {oc.codeSystem}
                                           </Badge>
                                         </TableCell>
-                                        <TableCell>
+                                        <TableCell className="text-center whitespace-nowrap">
+                                          {oc.isRefset ? '✓' : ''}
+                                        </TableCell>
+                                        <TableCell className="text-center whitespace-nowrap">
                                           {oc.includeChildren && <Badge className="text-xs">Yes</Badge>}
                                         </TableCell>
-                                        <TableCell className="font-mono text-xs">
+                                        <TableCell className="font-mono text-xs whitespace-nowrap">
                                           {oc.translatedTo && (
                                             <span className="text-green-600">{oc.translatedTo}</span>
                                           )}
@@ -398,6 +402,31 @@ export default function CodeDisplay({ expandedCodes, report, isExpanding, totalV
                             </div>
                           )}
 
+                          {/* Refsets Metadata */}
+                          {group.refsets && group.refsets.length > 0 && (
+                            <div>
+                              <h4 className="text-sm font-semibold mb-2">Refsets ({group.refsets.length})</h4>
+                              <div className="border rounded-md bg-background">
+                                <Table>
+                                  <TableHeader>
+                                    <TableRow>
+                                      <TableHead className="w-48">Refset Code</TableHead>
+                                      <TableHead>Refset Name</TableHead>
+                                    </TableRow>
+                                  </TableHeader>
+                                  <TableBody>
+                                    {group.refsets.map((refset, i) => (
+                                      <TableRow key={i}>
+                                        <TableCell className="font-mono text-xs">{refset.refsetId}</TableCell>
+                                        <TableCell className="text-sm">{refset.refsetName}</TableCell>
+                                      </TableRow>
+                                    ))}
+                                  </TableBody>
+                                </Table>
+                              </div>
+                            </div>
+                          )}
+                          
                           {/* Output Codes Table */}
                           <div>
                             <div className="flex items-center justify-between mb-2">
@@ -426,8 +455,12 @@ export default function CodeDisplay({ expandedCodes, report, isExpanding, totalV
                                       <TableCell className="font-mono text-xs">{concept.code}</TableCell>
                                       <TableCell className="text-sm">{concept.display}</TableCell>
                                       <TableCell className="whitespace-nowrap">
-                                        <Badge className="text-xs bg-green-100 text-green-800 border-green-200">
-                                          terminology_server
+                                        <Badge className={`text-xs ${
+                                          concept.source === 'rf2_file'
+                                            ? 'bg-blue-100 text-blue-800 border-blue-200 hover:!bg-blue-100'
+                                            : 'bg-green-100 text-green-800 border-green-200 hover:!bg-green-100'
+                                        }`}>
+                                          {concept.source === 'rf2_file' ? 'RF2' : 'terminology_server'}
                                         </Badge>
                                       </TableCell>
                                     </TableRow>

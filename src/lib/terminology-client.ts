@@ -5,7 +5,8 @@ const TERMINOLOGY_SERVER_BASE =
   process.env.TERMINOLOGY_SERVER ||
   'https://ontology.onelondon.online/production1/fhir';
 
-const EMIS_TO_SNOMED_CONCEPT_MAP_ID = 'cc541295-07b3-42c3-888e-a86cdd34b1a0';
+const EMIS_TO_SNOMED_CONCEPT_MAP_ID = '8d2953a3-b70b-4727-8a6a-8b4d912535ad'; // Version 2.1.4
+const EMIS_TO_SNOMED_FALLBACK_CONCEPT_MAP_ID = 'b5519813-31eb-4cad-8c77-b8999420e3c9'; // DrugCodeID fallback
 const EMIS_CODE_SYSTEM = 'http://LDS.nhs/EMIS/CodeID/cs';
 const SNOMED_CODE_SYSTEM = 'http://snomed.info/sct';
 
@@ -13,15 +14,15 @@ const SNOMED_CODE_SYSTEM = 'http://snomed.info/sct';
 const ACCEPTED_EQUIVALENCES = ['equivalent', 'narrower'];
 
 /**
- * Translates a single EMIS code to SNOMED using ConceptMap
- * Only accepts mappings with equivalence "equivalent" or "narrower"
- * Returns null for "broader", "related", or other equivalences
+ * Attempts translation using a specific ConceptMap ID
+ * Returns the translated code if successful, null otherwise
  */
-export async function translateEmisCodeToSnomed(
-  emisCode: string
+async function tryConceptMapTranslation(
+  emisCode: string,
+  conceptMapId: string,
+  token: string
 ): Promise<TranslatedCode | null> {
-  const token = await getAccessToken();
-  const url = `${TERMINOLOGY_SERVER_BASE}/ConceptMap/${EMIS_TO_SNOMED_CONCEPT_MAP_ID}/$translate`;
+  const url = `${TERMINOLOGY_SERVER_BASE}/ConceptMap/${conceptMapId}/$translate`;
 
   try {
     const response = await fetch(url, {
@@ -53,10 +54,11 @@ export async function translateEmisCodeToSnomed(
 
     if (!response.ok) {
       if (response.status === 404) {
-        return null;
+        return null; // Code not found in this ConceptMap
       }
+      // For other errors, log but don't throw - will try fallback
       const errorText = await response.text();
-      console.error(`Failed to translate EMIS code ${emisCode}: ${response.status}`, errorText.substring(0, 200));
+      console.warn(`ConceptMap ${conceptMapId} failed for code ${emisCode}: ${response.status}`, errorText.substring(0, 200));
       return null;
     }
 
@@ -73,8 +75,7 @@ export async function translateEmisCodeToSnomed(
 
           // CRITICAL: Only accept equivalent or narrower mappings
           if (equivalence && !ACCEPTED_EQUIVALENCES.includes(equivalence)) {
-            console.log(`Rejecting EMIS code ${emisCode}: equivalence "${equivalence}" not in [${ACCEPTED_EQUIVALENCES.join(', ')}]`);
-            return null;
+            return null; // Rejected due to equivalence - don't log, will try fallback
           }
 
           const conceptPart = matchParam.part.find((p) => p.name === 'concept');
@@ -91,9 +92,37 @@ export async function translateEmisCodeToSnomed(
 
     return null;
   } catch (error) {
-    console.error(`Error translating EMIS code ${emisCode}:`, error);
+    console.warn(`Error translating EMIS code ${emisCode} with ConceptMap ${conceptMapId}:`, error);
     return null;
   }
+}
+
+/**
+ * Translates a single EMIS code to SNOMED using ConceptMap
+ * Tries the main ConceptMap first, then falls back to the DrugCodeID ConceptMap if the main one fails
+ * Only accepts mappings with equivalence "equivalent" or "narrower"
+ * Returns null for "broader", "related", or other equivalences
+ */
+export async function translateEmisCodeToSnomed(
+  emisCode: string
+): Promise<TranslatedCode | null> {
+  const token = await getAccessToken();
+
+  // Try main ConceptMap first
+  const result = await tryConceptMapTranslation(emisCode, EMIS_TO_SNOMED_CONCEPT_MAP_ID, token);
+  if (result) {
+    return result;
+  }
+
+  // If main ConceptMap failed (non-404 error) or returned no match, try fallback
+  console.log(`Trying fallback ConceptMap for EMIS code ${emisCode}...`);
+  const fallbackResult = await tryConceptMapTranslation(emisCode, EMIS_TO_SNOMED_FALLBACK_CONCEPT_MAP_ID, token);
+  if (fallbackResult) {
+    console.log(`Fallback ConceptMap succeeded for EMIS code ${emisCode}`);
+    return fallbackResult;
+  }
+
+  return null;
 }
 
 /**

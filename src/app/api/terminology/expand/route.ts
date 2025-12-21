@@ -5,7 +5,7 @@ import {
   ExpandedCodeSet,
   ValueSetGroup,
 } from '@/lib/types';
-import { buildBatchedEclQuery, buildUkProductEcl } from '@/lib/ecl-builder';
+import { buildBatchedEclQuery, buildBatchedEclQueryWithoutRefsets, buildUkProductEcl, separateRefsets } from '@/lib/ecl-builder';
 import {
   expandEclQuery,
   translateEmisCodesToSnomed,
@@ -13,6 +13,7 @@ import {
 } from '@/lib/terminology-client';
 import { formatForSql } from '@/lib/sql-formatter';
 import { generateValueSetHash, generateValueSetFriendlyName, generateValueSetId } from '@/lib/valueset-utils';
+import { expandRefsetsFromRf2, refsetExistsInRf2, getRefsetDisplayName } from '@/lib/rf2-refset-parser';
 
 export async function POST(request: NextRequest) {
   try {
@@ -53,6 +54,23 @@ export async function POST(request: NextRequest) {
         loggedMappings++;
       }
     });
+
+    // Fallback: Check if codes that failed ConceptMap translation are refsets in RF2
+    const codesNotTranslated = parentCodes.filter(code => !codeToSnomedMap.has(code));
+    if (codesNotTranslated.length > 0) {
+      console.log(`Checking ${codesNotTranslated.length} untranslated codes against RF2 refsets...`);
+      for (const code of codesNotTranslated) {
+        // Check if this code exists as a refset in RF2
+        if (refsetExistsInRf2(code)) {
+          console.log(`  Code ${code} found as refset in RF2, will expand from RF2`);
+          // Mark as refset if not already marked
+          const codeIndex = parentCodes.indexOf(code);
+          if (codeIndex !== -1 && isRefset) {
+            isRefset[codeIndex] = true;
+          }
+        }
+      }
+    }
 
     // Collect all SNOMED codes (translated or original if translation failed)
     const allSnomedCodes: string[] = [];
@@ -175,33 +193,81 @@ export async function POST(request: NextRequest) {
         // Filter out SCT_CONST codes from normal expansion (they're handled separately)
         const nonSctConstValues = vsValues.filter(v => v.codeSystem !== 'SCT_CONST');
         
-        // Build ECL query for non-SCT_CONST codes only
-        const eclExpression = nonSctConstValues.length > 0 
-          ? buildBatchedEclQuery(nonSctConstValues, vsExcludedCodes)
-          : '';
-
-        console.log(`Expanding ValueSet ${mapping.valueSetIndex + 1} with ${nonSctConstValues.length} codes (${sctConstCodes.length} SCT_CONST handled separately)...`);
+        // Separate refsets from non-refsets
+        const { refsets: refsetValues, nonRefsets: nonRefsetValues } = separateRefsets(nonSctConstValues);
+        
+        // Also check codes that failed ConceptMap translation - they might be refsets in RF2
+        // Check both the original code and the resolved code (after historical resolution)
+        const codesThatFailedConceptMap = nonSctConstValues.filter(v => {
+          const translatedCode = codeToSnomedMap.get(v.originalCode);
+          return !translatedCode && !v.isRefset; // Failed translation and not already marked as refset
+        });
+        
+        // Check if any of these failed codes (or their resolved codes) are refsets in RF2
+        const potentialRefsetsFromRf2: typeof nonSctConstValues = [];
+        for (const value of codesThatFailedConceptMap) {
+          // Check both the original code and the resolved code
+          const codesToCheck = [value.code, value.originalCode].filter(Boolean);
+          for (const codeToCheck of codesToCheck) {
+            if (refsetExistsInRf2(codeToCheck)) {
+              console.log(`  Code ${value.originalCode} (resolved: ${value.code}) not translated by ConceptMap but found as refset ${codeToCheck} in RF2`);
+              potentialRefsetsFromRf2.push({ ...value, code: codeToCheck, isRefset: true });
+              break; // Found it, no need to check other codes
+            }
+          }
+        }
+        
+        // Combine detected refsets with potential refsets from RF2
+        const allRefsetValues = [...refsetValues, ...potentialRefsetsFromRf2];
+        // Filter out potential refsets from non-refsets by comparing codes (since nonRefsetValues are EmisValue type)
+        const allNonRefsetValues = nonRefsetValues.filter(v => 
+          !potentialRefsetsFromRf2.some(pr => pr.code === v.code || pr.originalCode === v.code)
+        );
+        
+        console.log(`Expanding ValueSet ${mapping.valueSetIndex + 1} with ${nonSctConstValues.length} codes (${allRefsetValues.length} refsets including ${potentialRefsetsFromRf2.length} found in RF2, ${allNonRefsetValues.length} non-refsets, ${sctConstCodes.length} SCT_CONST handled separately)...`);
 
         let vsConcepts: any[] = [];
         
-        // Expand normal codes if any
+        // First, try expanding refsets from RF2 files
+        const refsetIds = allRefsetValues.map(v => v.code);
+        const rf2RefsetResults = await expandRefsetsFromRf2(refsetIds);
+        const rf2RefsetIds = Array.from(rf2RefsetResults.keys());
+        const refsetsNotFoundInRf2 = refsetIds.filter(id => !rf2RefsetIds.includes(id));
+        
+        // Add RF2 refset results
+        for (const [refsetId, concepts] of rf2RefsetResults) {
+          vsConcepts.push(...concepts);
+          console.log(`  -> Expanded refset ${refsetId} from RF2: ${concepts.length} members`);
+        }
+        
+        // For refsets not found in RF2, fall back to ECL queries
+        const refsetsToQueryViaEcl = allRefsetValues.filter(v => refsetsNotFoundInRf2.includes(v.code));
+        
+        // Build ECL query for non-refsets and refsets not found in RF2
+        const valuesForEcl = [...allNonRefsetValues, ...refsetsToQueryViaEcl];
+        const eclExpression = valuesForEcl.length > 0 
+          ? buildBatchedEclQuery(valuesForEcl, vsExcludedCodes)
+          : '';
+
+        // Expand via terminology server if needed
         if (eclExpression) {
           try {
-            vsConcepts = await expandEclQuery(eclExpression);
-            console.log(`  -> Got ${vsConcepts.length} concepts for ValueSet ${mapping.valueSetIndex + 1}`);
+            const eclConcepts = await expandEclQuery(eclExpression);
+            console.log(`  -> Got ${eclConcepts.length} concepts from terminology server for ValueSet ${mapping.valueSetIndex + 1}`);
+            vsConcepts.push(...eclConcepts);
           } catch (error) {
-            console.error(`Error expanding ValueSet ${mapping.valueSetIndex + 1}:`, error);
-            // Continue with empty concepts for this ValueSet
+            console.error(`Error expanding ValueSet ${mapping.valueSetIndex + 1} via ECL:`, error);
+            // Continue with concepts we already have from RF2
           }
         }
         
         // Combine normal concepts with UK Product concepts
         vsConcepts = [...vsConcepts, ...ukProductConcepts];
 
-        // Mark parent codes in this ValueSet and set source
+        // Mark parent codes in this ValueSet (preserve source from RF2 or terminology server)
         const vsParentConceptIdSet = new Set(vsValues.map(v => v.code));
         vsConcepts.forEach((concept) => {
-          concept.source = 'terminology_server';
+          // Don't overwrite source - RF2 concepts already have 'rf2_file', ECL concepts have 'terminology_server'
           if (vsParentConceptIdSet.has(concept.code)) {
             const valueIndex = vsValues.findIndex(v => v.code === concept.code);
             if (valueIndex !== -1) {
@@ -215,19 +281,10 @@ export async function POST(request: NextRequest) {
           }
         });
 
-        // Only include codes that were actually returned by the terminology server
-        // Do NOT add codes that weren't found - they should appear in failed codes instead
-        // This ensures the "terminology_server" source label is accurate
-
         // Filter out excluded codes
         const filteredConcepts = vsConcepts.filter(
           (c) => !vsExcludedSet.has(c.code)
         );
-
-        // Mark all concepts as from terminology server
-        filteredConcepts.forEach((c) => {
-          c.source = 'terminology_server';
-        });
 
         // Check if expansion failed for refsets
         const vsIsRefsetFlags = mapping.codeIndices.map((idx) => isRefset?.[idx] || false);
@@ -259,14 +316,30 @@ export async function POST(request: NextRequest) {
           };
         });
 
+        // Track refsets that were successfully expanded from RF2
+        const successfullyExpandedRefsets = new Set(rf2RefsetIds);
+        
+        // Get refset metadata (code and name) for successfully expanded refsets
+        const refsetsMetadata = rf2RefsetIds.map(refsetId => ({
+          refsetId,
+          refsetName: getRefsetDisplayName(refsetId) || `Refset ${refsetId}`,
+        }));
+
         // Track failed codes - codes that don't appear in expanded concepts
         // Exclude SCT_CONST codes that successfully expanded to UK Products
+        // Exclude refsets that successfully expanded from RF2 (refset ID itself isn't a concept)
         const expandedCodeSet = new Set(filteredConcepts.map(c => c.code));
         const failedCodes = originalCodesMetadata
           .filter(oc => {
             // Skip SCT_CONST codes that successfully expanded to UK Products
             // (The substance codes themselves won't appear in expanded concepts, only the products will)
             if (oc.codeSystem === 'SCT_CONST' && successfullyExpandedSctConstCodes.has(oc.originalCode)) {
+              return false;
+            }
+            
+            // Skip refsets that successfully expanded from RF2
+            // (The refset ID itself isn't a concept, so it won't appear in expanded concepts)
+            if (oc.isRefset && successfullyExpandedRefsets.has(oc.translatedTo || oc.originalCode)) {
               return false;
             }
             
@@ -306,6 +379,7 @@ export async function POST(request: NextRequest) {
           parentCodes: vsSnomedParentCodes,
           expansionError,
           failedCodes: failedCodes.length > 0 ? failedCodes : undefined,
+          refsets: refsetsMetadata.length > 0 ? refsetsMetadata : undefined,
           originalCodes: originalCodesMetadata,
         });
 
@@ -319,26 +393,49 @@ export async function POST(request: NextRequest) {
       const BATCH_SIZE = 50;
       const expandedConcepts: any[] = [];
 
-      if (values.length > BATCH_SIZE) {
-        for (let i = 0; i < values.length; i += BATCH_SIZE) {
-          const batch = values.slice(i, i + BATCH_SIZE);
+      // Separate refsets from non-refsets
+      const { refsets: refsetValues, nonRefsets: nonRefsetValues } = separateRefsets(values);
+      
+      // Expand refsets from RF2 first
+      const refsetIds = refsetValues.map(v => v.code);
+      const rf2RefsetResults = await expandRefsetsFromRf2(refsetIds);
+      const rf2RefsetIds = Array.from(rf2RefsetResults.keys());
+      const refsetsNotFoundInRf2 = refsetIds.filter(id => !rf2RefsetIds.includes(id));
+      
+      // Add RF2 refset results
+      for (const [refsetId, concepts] of rf2RefsetResults) {
+        expandedConcepts.push(...concepts);
+        console.log(`Expanded refset ${refsetId} from RF2: ${concepts.length} members`);
+      }
+      
+      // For refsets not found in RF2, add them back to values for ECL query
+      const refsetsToQueryViaEcl = refsetValues.filter(v => refsetsNotFoundInRf2.includes(v.code));
+      const valuesForEcl = [...nonRefsetValues, ...refsetsToQueryViaEcl];
+
+      if (valuesForEcl.length > BATCH_SIZE) {
+        for (let i = 0; i < valuesForEcl.length; i += BATCH_SIZE) {
+          const batch = valuesForEcl.slice(i, i + BATCH_SIZE);
           const eclExpression = buildBatchedEclQuery(batch, allExcludedCodes);
 
           try {
             const batchConcepts = await expandEclQuery(eclExpression);
             expandedConcepts.push(...batchConcepts);
 
-            if (i + BATCH_SIZE < values.length) {
+            if (i + BATCH_SIZE < valuesForEcl.length) {
               await new Promise(resolve => setTimeout(resolve, 10));
             }
           } catch (error) {
             console.error(`Error expanding batch:`, error);
           }
         }
-      } else {
-        const eclExpression = buildBatchedEclQuery(values, allExcludedCodes);
-        const concepts = await expandEclQuery(eclExpression);
-        expandedConcepts.push(...concepts);
+      } else if (valuesForEcl.length > 0) {
+        const eclExpression = buildBatchedEclQuery(valuesForEcl, allExcludedCodes);
+        try {
+          const concepts = await expandEclQuery(eclExpression);
+          expandedConcepts.push(...concepts);
+        } catch (error) {
+          console.error(`Error expanding codes:`, error);
+        }
       }
 
       expandedConcepts.forEach((concept) => {

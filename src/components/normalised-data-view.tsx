@@ -80,7 +80,7 @@ export default function NormalisedDataView({ report, expandedCodes }: Normalised
         valueset_id: group.valueSetId,
         snomed_code: concept.code,
         display: concept.display,
-        source: 'terminology_server',
+        source: concept.source || 'terminology_server', // Use actual source (rf2_file or terminology_server)
         exclude_children: concept.excludeChildren ? 'true' : 'false',
       }))
     ) || [];
@@ -294,8 +294,12 @@ export default function NormalisedDataView({ report, expandedCodes }: Normalised
                     <TableCell className="h-6 px-2 py-0.5 font-mono text-xs whitespace-nowrap">{concept.code}</TableCell>
                     <TableCell className="h-6 px-2 py-0.5 text-xs whitespace-nowrap">{concept.display}</TableCell>
                     <TableCell className="h-6 px-2 py-0.5 whitespace-nowrap">
-                      <Badge className="text-xs h-4 px-1 bg-green-100 text-green-800 border-green-200">
-                        terminology_server
+                      <Badge className={`text-xs h-4 px-1 ${
+                        concept.source === 'rf2_file'
+                          ? 'bg-blue-100 text-blue-800 border-blue-200 hover:!bg-blue-100'
+                          : 'bg-green-100 text-green-800 border-green-200 hover:!bg-green-100'
+                      }`}>
+                        {concept.source === 'rf2_file' ? 'RF2' : 'terminology_server'}
                       </Badge>
                     </TableCell>
                     <TableCell className="h-6 px-2 py-0.5 text-xs text-center whitespace-nowrap">
