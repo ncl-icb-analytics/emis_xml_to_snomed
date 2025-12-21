@@ -1,11 +1,11 @@
-import { ValueSet } from './types';
+import { EmisValueSet } from './types';
 
 /**
  * Prepares a ValueSet for expansion by extracting codes, display names, and metadata
  * into arrays suitable for the terminology expansion API
  */
 export function prepareValueSetForExpansion(
-  vs: ValueSet,
+  vs: EmisValueSet,
   vsIndex: number
 ) {
   const parentCodes: string[] = [];
@@ -52,7 +52,7 @@ export function prepareValueSetForExpansion(
 export async function expandValueSet(
   reportId: string,
   reportName: string,
-  vs: ValueSet,
+  vs: EmisValueSet,
   vsIndex: number
 ) {
   const preparedData = prepareValueSetForExpansion(vs, vsIndex);

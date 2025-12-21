@@ -265,19 +265,19 @@ export default function FolderTreeNavigation() {
           <>
             {filteredItems.folders.map((folder) => (
               <div
-                key={folder.path.join('/')}
+                key={folder.pathSegments.join('/')}
                 className="flex flex-col gap-0.5 px-2 py-1.5 rounded-sm cursor-pointer hover:bg-accent transition-colors text-sm"
-                onClick={() => handleFolderClick(folder.path.join('/'))}
+                onClick={() => handleFolderClick(folder.pathSegments.join('/'))}
               >
                 <div className="flex items-center gap-2">
                   <Folder className="h-4 w-4 text-blue-500 flex-shrink-0" />
                   <span className="flex-1 truncate font-medium">{folder.name}</span>
                   <Badge variant="secondary" className="text-xs h-5">
-                    {countReports(folder)}
+                    {countReportsInFolder(folder)}
                   </Badge>
                 </div>
                 <div className="text-xs text-muted-foreground pl-6 truncate">
-                  {folder.path.join(' > ')}
+                  {folder.pathSegments.join(' > ')}
                 </div>
               </div>
             ))}
