@@ -10,13 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Search, CheckSquare, Square, ChevronDown, ChevronRight, Folder } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { loadParsedXmlData } from '@/lib/storage';
-
-interface FolderNode {
-  path: string;
-  name: string;
-  reports: EmisReport[];
-  children: Map<string, FolderNode>;
-}
+import { buildFolderTree, getAllReportsInFolder, FolderNode } from '@/lib/folder-tree-utils';
 
 export default function BatchReportSelector() {
   const { selectedReportIds, toggleReportSelection, selectAllReports, deselectAllReports, isReportSelected } = useAppMode();
@@ -62,50 +56,8 @@ export default function BatchReportSelector() {
     };
   }, []);
 
-  // Build folder tree from reports
-  const folderTree = useMemo(() => {
-    const root: FolderNode = {
-      path: '',
-      name: 'Root',
-      reports: [],
-      children: new Map(),
-    };
-
-    reports.forEach((report) => {
-      // Extract folder path from rule (skip first segment which is XML filename)
-      const segments = report.rule.split(' > ').slice(1);
-
-      if (segments.length === 0) {
-        // No folder structure, add to root
-        root.reports.push(report);
-        return;
-      }
-
-      let currentNode = root;
-      let currentPath = '';
-
-      // Navigate through folders (all segments are folders)
-      segments.forEach((segment, index) => {
-        currentPath = currentPath ? `${currentPath} > ${segment}` : segment;
-
-        // Create folder if it doesn't exist
-        if (!currentNode.children.has(segment)) {
-          currentNode.children.set(segment, {
-            path: currentPath,
-            name: segment,
-            reports: [],
-            children: new Map(),
-          });
-        }
-        currentNode = currentNode.children.get(segment)!;
-      });
-
-      // Add report to the final folder
-      currentNode.reports.push(report);
-    });
-
-    return root;
-  }, [reports]);
+  // Build folder tree from reports using shared utility
+  const folderTree = useMemo(() => buildFolderTree(reports), [reports]);
 
   // Filter reports by search query
   const filteredReports = useMemo(() => {
@@ -152,14 +104,6 @@ export default function BatchReportSelector() {
       newExpanded.add(folderPath);
     }
     setExpandedFolders(newExpanded);
-  };
-
-  const getAllReportsInFolder = (node: FolderNode): EmisReport[] => {
-    const allReports = [...node.reports];
-    node.children.forEach((childNode) => {
-      allReports.push(...getAllReportsInFolder(childNode));
-    });
-    return allReports;
   };
 
   const isFolderFullySelected = (node: FolderNode): boolean => {

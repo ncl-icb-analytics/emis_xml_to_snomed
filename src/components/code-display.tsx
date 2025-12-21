@@ -111,11 +111,10 @@ export default function CodeDisplay({ expandedCodes, report, isExpanding, totalV
         ]);
         csvContent = [headers.join(','), ...rows.map((r: string[]) => r.join(','))].join('\n');
       } else {
-        const headers = ['SNOMED Code', 'Display', 'Type', 'Source'];
+        const headers = ['SNOMED Code', 'Display', 'Source'];
         const rows = group.concepts.map((c: any) => [
           c.code,
           `"${c.display.replace(/"/g, '""')}"`,
-          c.isRefset ? 'Refset' : '',
           'Terminology Server',
         ]);
         csvContent = [headers.join(','), ...rows.map((r: string[]) => r.join(','))].join('\n');
@@ -152,27 +151,14 @@ export default function CodeDisplay({ expandedCodes, report, isExpanding, totalV
               <div className="text-2xl font-bold">{expandedCodes.valueSetGroups?.length || 0}</div>
             </div>
           </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handleDownloadCsv(null, 'summary')}
-            >
-              <Download className="w-4 h-4 mr-2" />
-              Export Summary
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handleCopy(expandedCodes.sqlFormattedCodes, 'all')}
-            >
-              {copiedButton === 'all' ? (
-                <><Check className="w-4 h-4 mr-2" /> Copied!</>
-              ) : (
-                <><Copy className="w-4 h-4 mr-2" /> Copy All SQL</>
-              )}
-            </Button>
-          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => handleDownloadCsv(null, 'summary')}
+          >
+            <Download className="w-4 h-4 mr-2" />
+            Export Summary
+          </Button>
         </div>
       </Card>
 
@@ -238,17 +224,18 @@ export default function CodeDisplay({ expandedCodes, report, isExpanding, totalV
       })()}
 
       {/* ValueSets Table */}
-      <Card>
-        <Table>
+      <Card className="w-full max-w-full min-w-0 overflow-hidden">
+        <div className="overflow-x-auto">
+          <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-12"></TableHead>
-              <TableHead className="w-12">Status</TableHead>
-              <TableHead>ValueSet Name</TableHead>
-              <TableHead>Hash</TableHead>
-              <TableHead className="text-right">XML</TableHead>
-              <TableHead className="text-right">Output</TableHead>
-              <TableHead className="w-24">Actions</TableHead>
+              <TableHead className="w-12 whitespace-nowrap"></TableHead>
+              <TableHead className="w-12 whitespace-nowrap">Status</TableHead>
+              <TableHead className="min-w-[200px] max-w-[400px] whitespace-nowrap">ValueSet Name</TableHead>
+              <TableHead className="w-32 whitespace-nowrap">Hash</TableHead>
+              <TableHead className="w-16 text-right whitespace-nowrap">XML</TableHead>
+              <TableHead className="w-20 text-right whitespace-nowrap">Output</TableHead>
+              <TableHead className="w-24 whitespace-nowrap">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -278,23 +265,23 @@ export default function CodeDisplay({ expandedCodes, report, isExpanding, totalV
                         </div>
                       )}
                     </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
+                    <TableCell className="min-w-[200px] max-w-[400px]">
+                      <div className="flex flex-col gap-1">
                         <div
-                          className="group flex items-center gap-1 cursor-pointer"
+                          className="group flex items-center gap-1 cursor-pointer min-w-0"
                           onClick={(e) => {
                             e.stopPropagation();
                             handleCopyItem(group.valueSetFriendlyName, `name-${idx}`);
                           }}
-                          title="Click to copy name"
+                          title={`${group.valueSetFriendlyName} - Click to copy`}
                         >
-                          <span className="font-medium text-sm group-hover:text-primary transition-colors">
+                          <span className="font-medium text-sm group-hover:text-primary transition-colors truncate">
                             {group.valueSetFriendlyName}
                           </span>
                           {copiedItem === `name-${idx}` ? (
-                            <Check className="w-3 h-3 text-green-600" />
+                            <Check className="w-3 h-3 text-green-600 flex-shrink-0" />
                           ) : (
-                            <Copy className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground" />
+                            <Copy className="h-3 w-0 overflow-hidden opacity-0 group-hover:w-3 group-hover:opacity-100 transition-all text-muted-foreground flex-shrink-0" />
                           )}
                         </div>
                         <div
@@ -303,40 +290,51 @@ export default function CodeDisplay({ expandedCodes, report, isExpanding, totalV
                             e.stopPropagation();
                             handleCopyItem(group.valueSetUniqueName, `id-${idx}`);
                           }}
-                          title="Click to copy ID"
+                          title={`ID: ${group.valueSetUniqueName} - Click to copy`}
                         >
                           <Badge
                             variant="outline"
-                            className="font-mono text-xs bg-purple-50 text-purple-700 border-purple-200 group-hover:bg-purple-100 transition-colors inline-flex items-center gap-1"
+                            className="font-mono text-[10px] bg-purple-50 text-purple-700 border-purple-200 group-hover:bg-purple-100 transition-all inline-flex items-center gap-1 max-w-full"
                           >
-                            {group.valueSetUniqueName}
+                            <span className="truncate">{group.valueSetUniqueName}</span>
                             {copiedItem === `id-${idx}` ? (
-                              <Check className="w-3 h-3 text-green-600" />
+                              <Check className="w-3 h-3 text-green-600 flex-shrink-0" />
                             ) : (
-                              <Copy className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+                              <Copy className="h-3 w-0 overflow-hidden opacity-0 group-hover:w-3 group-hover:opacity-100 transition-all flex-shrink-0" />
                             )}
                           </Badge>
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell>
-                      <span className="font-mono text-xs text-muted-foreground">
-                        {group.valueSetHash}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-right">{inputCount}</TableCell>
-                    <TableCell className="text-right font-medium">{outputCount}</TableCell>
-                    <TableCell onClick={(e) => e.stopPropagation()}>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleCopy(group.sqlFormattedCodes, idx)}
+                    <TableCell className="w-32">
+                      <div
+                        className="group flex items-center gap-1 cursor-pointer min-w-0"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleCopyItem(group.valueSetHash, `hash-${idx}`);
+                        }}
+                        title={`Hash: ${group.valueSetHash} - Click to copy`}
                       >
-                        {copiedButton === idx ? (
-                          <Check className="w-4 h-4" />
+                        <span className="font-mono text-xs text-muted-foreground truncate group-hover:text-primary transition-colors">
+                          {group.valueSetHash}
+                        </span>
+                        {copiedItem === `hash-${idx}` ? (
+                          <Check className="w-3 h-3 text-green-600 flex-shrink-0" />
                         ) : (
-                          <Copy className="w-4 h-4" />
+                          <Copy className="h-3 w-0 overflow-hidden opacity-0 group-hover:w-3 group-hover:opacity-100 transition-all text-muted-foreground flex-shrink-0" />
                         )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right whitespace-nowrap">{inputCount}</TableCell>
+                    <TableCell className="text-right font-medium whitespace-nowrap">{outputCount}</TableCell>
+                    <TableCell onClick={(e) => e.stopPropagation()} className="whitespace-nowrap">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleDownloadCsv(group, 'output')}
+                        className="mr-2"
+                      >
+                        <Download className="w-4 h-4" />
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -419,7 +417,6 @@ export default function CodeDisplay({ expandedCodes, report, isExpanding, totalV
                                   <TableRow>
                                     <TableHead className="w-32">Code</TableHead>
                                     <TableHead>Display</TableHead>
-                                    <TableHead className="w-24">Type</TableHead>
                                     <TableHead className="w-40">Source</TableHead>
                                   </TableRow>
                                 </TableHeader>
@@ -428,13 +425,6 @@ export default function CodeDisplay({ expandedCodes, report, isExpanding, totalV
                                     <TableRow key={i}>
                                       <TableCell className="font-mono text-xs">{concept.code}</TableCell>
                                       <TableCell className="text-sm">{concept.display}</TableCell>
-                                      <TableCell>
-                                        {concept.isRefset && (
-                                          <Badge className="text-xs bg-purple-100 text-purple-800 border-purple-200">
-                                            Refset
-                                          </Badge>
-                                        )}
-                                      </TableCell>
                                       <TableCell className="whitespace-nowrap">
                                         <Badge className="text-xs bg-green-100 text-green-800 border-green-200">
                                           terminology_server
@@ -444,6 +434,35 @@ export default function CodeDisplay({ expandedCodes, report, isExpanding, totalV
                                   ))}
                                 </TableBody>
                               </Table>
+                            </div>
+                          </div>
+
+                          {/* SQL Format Preview */}
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <h4 className="text-sm font-semibold">SQL IN Clause Format</h4>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleCopy(group.sqlFormattedCodes, idx)}
+                              >
+                                {copiedButton === idx ? (
+                                  <>
+                                    <Check className="w-4 h-4 mr-2" />
+                                    Copied!
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-4 h-4 mr-2" />
+                                    Copy for SQL
+                                  </>
+                                )}
+                              </Button>
+                            </div>
+                            <div className="border rounded-md bg-muted/50 p-3">
+                              <code className="text-xs font-mono text-muted-foreground break-all">
+                                {group.sqlFormattedCodes}
+                              </code>
                             </div>
                           </div>
 
@@ -493,7 +512,8 @@ export default function CodeDisplay({ expandedCodes, report, isExpanding, totalV
               );
             })}
           </TableBody>
-        </Table>
+          </Table>
+        </div>
       </Card>
       </TabsContent>
 

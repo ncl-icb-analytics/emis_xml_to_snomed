@@ -11,6 +11,9 @@ import { Package, Download, FileText, X, Loader2, CheckCircle2, AlertCircle, XCi
 import { loadParsedXmlData } from '@/lib/storage';
 import { ExtractionFileList } from '@/components/extraction-file-list';
 import { ExtractionDataModel } from '@/components/extraction-data-model';
+import { expandValueSet } from '@/lib/valueset-expansion';
+import { formatTime } from '@/lib/time-utils';
+import { convertToCSV } from '@/lib/csv-utils';
 
 interface ProcessingStatus {
   currentReport: number;
@@ -159,17 +162,6 @@ export default function BatchExtractor() {
     return () => clearInterval(interval);
   }, [status]); // Only depend on status, not processingStatus or selectedReports
 
-  const formatTime = (seconds: number): string => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    
-    if (hours > 0) {
-      return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-    }
-    return `${minutes}:${secs.toString().padStart(2, '0')}`;
-  };
-
   const handleExtract = async () => {
     if (selectedReports.length === 0) return;
 
@@ -240,60 +232,23 @@ export default function BatchExtractor() {
             message: `Processing ValueSet ${completedValueSets} of ${totalValueSets}`,
           });
 
-          // Prepare data for API call
-          const parentCodes: string[] = [];
-          const displayNames: string[] = [];
-          const includeChildren: boolean[] = [];
-          const isRefset: boolean[] = [];
-          const codeSystems: string[] = [];
-          const vsExcludedCodes: string[] = [];
-
-          vs.values.forEach((v) => {
-            parentCodes.push(v.code);
-            displayNames.push(v.displayName || v.code);
-            includeChildren.push(v.includeChildren);
-            isRefset.push(v.isRefset || false);
-            codeSystems.push(vs.codeSystem || 'EMISINTERNAL');
-          });
-
-          vs.exceptions.forEach((e) => {
-            vsExcludedCodes.push(e.code);
-          });
-
-          const valueSetMapping = [{
-            valueSetId: vs.id,
-            valueSetIndex: vsIndex,
-            codeIndices: parentCodes.map((_, idx) => idx),
-            excludedCodes: vsExcludedCodes,
-          }];
-
           // Check if extraction was cancelled before each API call
           if (cancellationRef.current) {
             setStatus('idle');
             setProcessingStatus(null);
             setIsExtracting(false);
+            setContextIsExtracting(false);
             return;
           }
 
           try {
-            // Make API call for this ValueSet
-            const response = await fetch('/api/terminology/expand', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                featureId: report.id,
-                featureName: report.name,
-                parentCodes,
-                displayNames,
-                excludedCodes: vsExcludedCodes,
-                includeChildren,
-                isRefset,
-                codeSystems,
-                valueSetMapping,
-              }),
-            });
-
-            const result = await response.json();
+            // Use shared utility to expand the ValueSet
+            const result = await expandValueSet(
+              report.id,
+              report.name,
+              vs,
+              vsIndex
+            );
 
             if (result.success && result.data && result.data.valueSetGroups) {
               const group = result.data.valueSetGroups[0];
@@ -431,44 +386,6 @@ export default function BatchExtractor() {
     lastRemainingTimeCalcRef.current = null;
   };
 
-  const convertToCSV = (data: any[], headers?: string[]): string => {
-    if (data.length === 0) return '';
-
-    // Use provided headers or extract from first object
-    const csvHeaders = headers || Object.keys(data[0]);
-
-    // Escape and quote CSV values
-    const escapeCSV = (value: any): string => {
-      if (value === null || value === undefined) return '';
-      const str = String(value);
-      // Quote if contains comma, quote, or newline
-      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-        return `"${str.replace(/"/g, '""')}"`;
-      }
-      return str;
-    };
-
-    // Create header row
-    const headerRow = csvHeaders.map(h => escapeCSV(h)).join(',');
-
-    // Create data rows
-    const dataRows = data.map(row =>
-      csvHeaders.map(header => escapeCSV(row[header])).join(',')
-    );
-
-    return [headerRow, ...dataRows].join('\n');
-  };
-
-  const downloadFile = (content: string, filename: string) => {
-    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
   const handleDownloadZIP = async () => {
     if (!extractedData) return;
 
@@ -569,9 +486,10 @@ export default function BatchExtractor() {
               onClick={handleExtract}
               disabled={isExtracting}
               size="lg"
+              className="whitespace-nowrap"
             >
               <Package className="mr-2 h-4 w-4" />
-              Extract All Tables
+              Extract All
             </Button>
           )}
         </div>
@@ -604,7 +522,7 @@ export default function BatchExtractor() {
         
         {status === 'idle' && (
           <p className="text-sm text-muted-foreground">
-            This will expand SNOMED codes for all selected reports and generate normalised tables ready for Snowflake import.
+            Clicking "Extract All" will expand SNOMED codes for all selected reports and generate normalised tables ready for Snowflake import.
           </p>
         )}
       </div>

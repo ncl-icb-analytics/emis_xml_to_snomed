@@ -3,6 +3,7 @@
 import React from 'react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   Table,
   TableBody,
@@ -11,7 +12,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { Download } from 'lucide-react';
 import { ExpandedCodeSet, EmisReport } from '@/lib/types';
+import { downloadNormalizedDataZip, NormalizedTables } from '@/lib/zip-utils';
 
 interface NormalisedDataViewProps {
   report: EmisReport;
@@ -32,8 +35,108 @@ export default function NormalisedDataView({ report, expandedCodes }: Normalised
     return sum + (vs?.exceptions?.length || 0);
   }, 0) || 0;
 
+  const handleDownloadAllTables = async () => {
+    // Build reports table
+    const reports = [{
+      report_id: report.id,
+      report_name: report.name,
+      search_name: report.searchName,
+      folder_path: report.rule,
+      xml_file_name: xmlFileName,
+      parsed_at: expandedCodes.expandedAt,
+    }];
+
+    // Build valuesets table
+    const valuesets = expandedCodes.valueSetGroups?.map((group) => ({
+      valueset_id: group.valueSetId,
+      report_id: report.id,
+      valueset_index: group.valueSetIndex,
+      valueset_hash: group.valueSetHash,
+      valueset_friendly_name: group.valueSetFriendlyName,
+      code_system: group.originalCodes?.[0]?.codeSystem || '',
+      expansion_error: group.expansionError || '',
+      expanded_at: expandedCodes.expandedAt,
+    })) || [];
+
+    // Build original_codes table
+    const originalCodes = expandedCodes.valueSetGroups?.flatMap((group) =>
+      group.originalCodes?.map((oc, idx) => ({
+        original_code_id: `${group.valueSetId}-oc${idx}`,
+        valueset_id: group.valueSetId,
+        original_code: oc.originalCode,
+        display_name: oc.displayName,
+        code_system: oc.codeSystem,
+        include_children: oc.includeChildren ? 'true' : 'false',
+        is_refset: oc.isRefset ? 'true' : 'false',
+        translated_to_snomed_code: oc.translatedTo || '',
+        translated_to_display: oc.translatedToDisplay || '',
+      })) || []
+    ) || [];
+
+    // Build expanded_concepts table
+    const expandedConcepts = expandedCodes.valueSetGroups?.flatMap((group) =>
+      group.concepts.map((concept, idx) => ({
+        concept_id: `${group.valueSetId}-c${idx}`,
+        valueset_id: group.valueSetId,
+        snomed_code: concept.code,
+        display: concept.display,
+        source: 'terminology_server',
+        exclude_children: concept.excludeChildren ? 'true' : 'false',
+      }))
+    ) || [];
+
+    // Build failed_codes table
+    const failedCodes = expandedCodes.valueSetGroups?.flatMap((group) =>
+      group.failedCodes?.map((failed, idx) => ({
+        failed_code_id: `${group.valueSetId}-failed${idx}`,
+        valueset_id: group.valueSetId,
+        original_code: failed.originalCode,
+        display_name: failed.displayName,
+        code_system: failed.codeSystem,
+        reason: failed.reason,
+      })) || []
+    ) || [];
+
+    // Build exceptions table
+    const exceptions = expandedCodes.valueSetGroups?.flatMap((group) =>
+      report.valueSets[group.valueSetIndex]?.exceptions?.map((exception, excIdx) => ({
+        exception_id: `${group.valueSetId}-exc${excIdx}`,
+        valueset_id: group.valueSetId,
+        excluded_code: exception.code,
+      })) || []
+    ) || [];
+
+    const normalizedData: NormalizedTables = {
+      reports,
+      valuesets,
+      originalCodes,
+      expandedConcepts,
+      failedCodes,
+      exceptions,
+    };
+
+    const filename = `${report.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_normalized_${new Date().toISOString().split('T')[0]}.zip`;
+    await downloadNormalizedDataZip(normalizedData, filename);
+  };
+
   return (
     <div className="space-y-4 w-full max-w-full min-w-0">
+      {/* Download Button */}
+      <Card className="p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold">Normalised Data Tables</h3>
+            <p className="text-sm text-muted-foreground mt-1">
+              6 tables with {valuesetsCount} ValueSets, {originalCodesCount} original codes, and {expandedConceptsCount} expanded concepts
+            </p>
+          </div>
+          <Button onClick={handleDownloadAllTables} variant="default">
+            <Download className="mr-2 h-4 w-4" />
+            Download ZIP Bundle
+          </Button>
+        </div>
+      </Card>
+
       {/* Reports Table */}
       <Card className="w-full max-w-full min-w-0 overflow-hidden">
         <div className="px-3 py-1.5 border-b bg-muted/30">
@@ -178,7 +281,6 @@ export default function NormalisedDataView({ report, expandedCodes }: Normalised
                 <TableHead className="h-7 px-2 py-0.5 text-xs font-semibold whitespace-nowrap">display</TableHead>
                 <TableHead className="h-7 px-2 py-0.5 text-xs font-semibold whitespace-nowrap">source</TableHead>
                 <TableHead className="h-7 px-2 py-0.5 text-xs font-semibold whitespace-nowrap">exclude_children</TableHead>
-                <TableHead className="h-7 px-2 py-0.5 text-xs font-semibold whitespace-nowrap">is_refset</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -198,9 +300,6 @@ export default function NormalisedDataView({ report, expandedCodes }: Normalised
                     </TableCell>
                     <TableCell className="h-6 px-2 py-0.5 text-xs text-center whitespace-nowrap">
                       {concept.excludeChildren ? '✓' : ''}
-                    </TableCell>
-                    <TableCell className="h-6 px-2 py-0.5 text-xs text-center whitespace-nowrap">
-                      {concept.isRefset ? '✓' : ''}
                     </TableCell>
                   </TableRow>
                 ))

@@ -21,13 +21,9 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import { buildFolderTree, navigateToFolder, searchFolderTree, getFolderContents, countReportsInFolder, FolderNode } from '@/lib/folder-tree-utils';
 
-interface FolderNode {
-  name: string;
-  path: string[];
-  reports: EmisReport[];
-  subfolders: Map<string, FolderNode>;
-}
+// Using shared FolderNode interface from folder-tree-utils
 
 export default function FolderTreeNavigation() {
   const [parsedData, setParsedData] = useState<EmisXmlDocument | null>(null);
@@ -118,98 +114,23 @@ export default function FolderTreeNavigation() {
 
   const folderTree = useMemo(() => {
     if (!parsedData) return null;
-
-    const root: FolderNode = {
-      name: 'Root',
-      path: [],
-      reports: [],
-      subfolders: new Map(),
-    };
-
-    parsedData.reports.forEach((report) => {
-      const segments = report.rule.split(' > ').slice(1);
-
-      if (segments.length === 0) {
-        root.reports.push(report);
-        return;
-      }
-
-      let currentNode = root;
-      segments.forEach((segment) => {
-        if (!currentNode.subfolders.has(segment)) {
-          currentNode.subfolders.set(segment, {
-            name: segment,
-            path: [...currentNode.path, segment],
-            reports: [],
-            subfolders: new Map(),
-          });
-        }
-        currentNode = currentNode.subfolders.get(segment)!;
-      });
-
-      currentNode.reports.push(report);
-    });
-
-    return root;
+    return buildFolderTree(parsedData.reports);
   }, [parsedData]);
 
   const currentNode = useMemo(() => {
     if (!folderTree) return null;
-
-    let node = folderTree;
-    for (const segment of currentPath) {
-      const nextNode = node.subfolders.get(segment);
-      if (!nextNode) return null;
-      node = nextNode;
-    }
-    return node;
+    return navigateToFolder(folderTree, currentPath);
   }, [folderTree, currentPath]);
 
   const filteredItems = useMemo(() => {
     if (!searchQuery || !folderTree) {
       // When not searching, show current folder contents
       if (!currentNode) return { folders: [], reports: [] };
-
-      const folders = Array.from(currentNode.subfolders.values())
-        .sort((a, b) => a.name.localeCompare(b.name));
-
-      const reports = currentNode.reports
-        .sort((a, b) => a.searchName.localeCompare(b.searchName));
-
-      return { folders, reports };
+      return getFolderContents(currentNode);
     }
 
-    // Global search across entire tree
-    const query = searchQuery.toLowerCase();
-    const allFolders: FolderNode[] = [];
-    const allReports: EmisReport[] = [];
-
-    const searchNode = (node: FolderNode) => {
-      // Search folders
-      node.subfolders.forEach((folder) => {
-        if (folder.name.toLowerCase().includes(query)) {
-          allFolders.push(folder);
-        }
-        searchNode(folder); // Recurse into subfolders
-      });
-
-      // Search reports
-      node.reports.forEach((report) => {
-        if (
-          report.name.toLowerCase().includes(query) ||
-          report.searchName.toLowerCase().includes(query)
-        ) {
-          allReports.push(report);
-        }
-      });
-    };
-
-    searchNode(folderTree);
-
-    return {
-      folders: allFolders.sort((a, b) => a.name.localeCompare(b.name)),
-      reports: allReports.sort((a, b) => a.searchName.localeCompare(b.searchName)),
-    };
+    // Global search across entire tree using shared utility
+    return searchFolderTree(folderTree, searchQuery);
   }, [folderTree, currentNode, searchQuery]);
 
   const handleReportClick = (report: EmisReport) => {
@@ -244,19 +165,14 @@ export default function FolderTreeNavigation() {
   };
 
   const renderFolderContents = (node: FolderNode, depth: number = 0) => {
-    const folders = Array.from(node.subfolders.values()).sort((a, b) =>
-      a.name.localeCompare(b.name)
-    );
-    const reports = node.reports.sort((a, b) =>
-      a.searchName.localeCompare(b.searchName)
-    );
+    const { folders, reports } = getFolderContents(node);
 
     return (
       <div>
         {folders.map((folder) => {
-          const folderPath = folder.path.join('/');
+          const folderPath = folder.pathSegments.join('/');
           const isExpanded = expandedFolders.has(folderPath);
-          const reportCount = countReports(folder);
+          const reportCount = countReportsInFolder(folder);
 
           return (
             <div key={folderPath}>
@@ -314,14 +230,6 @@ export default function FolderTreeNavigation() {
         ))}
       </div>
     );
-  };
-
-  const countReports = (node: FolderNode): number => {
-    let count = node.reports.length;
-    node.subfolders.forEach((subfolder) => {
-      count += countReports(subfolder);
-    });
-    return count;
   };
 
   if (!parsedData) {
