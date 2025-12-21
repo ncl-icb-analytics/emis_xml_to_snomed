@@ -81,7 +81,9 @@ export default function BatchExtractor() {
     };
   }, []);
 
-  const selectedReports = reports.filter((r) => selectedReportIds.has(r.id));
+  const selectedReports = reports
+    .filter((r) => selectedReportIds.has(r.id))
+    .sort((a, b) => a.searchName.localeCompare(b.searchName));
   const totalValueSets = selectedReports.reduce((sum, r) => sum + r.valueSets.length, 0);
 
   // Timer effect
