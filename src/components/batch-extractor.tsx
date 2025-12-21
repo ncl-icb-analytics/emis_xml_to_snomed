@@ -359,8 +359,9 @@ export default function BatchExtractor() {
       cancellationRef.current = false;
       setStartTime(null);
       setElapsedTime(0);
-      setEta(null);
+      setRemainingTime(null);
       valuesetTimesRef.current = [];
+      lastRemainingTimeCalcRef.current = null;
     }
   };
 
