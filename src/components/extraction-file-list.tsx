@@ -9,7 +9,7 @@ export function ExtractionFileList({ className }: ExtractionFileListProps) {
     { name: 'reports.csv', description: 'Report metadata with deterministic IDs' },
     { name: 'valuesets.csv', description: 'ValueSets with hash that can support deduplication' },
     { name: 'original_codes.csv', description: 'Original EMIS codes from XML' },
-    { name: 'expanded_concepts.csv', description: 'All expanded SNOMED codes' },
+    { name: 'expanded_concepts.csv', description: 'All expanded SNOMED concepts' },
     { name: 'failed_codes.csv', description: 'Codes that failed to translate/expand' },
     { name: 'exceptions.csv', description: 'Excluded codes' },
   ];

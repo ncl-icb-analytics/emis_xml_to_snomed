@@ -31,7 +31,7 @@ interface NormalizedTables {
 }
 
 export default function BatchExtractor() {
-  const { selectedReportIds, toggleReportSelection } = useAppMode();
+  const { selectedReportIds, toggleReportSelection, setIsExtracting: setContextIsExtracting } = useAppMode();
   const [reports, setReports] = useState<EmisReport[]>([]);
   const [isExtracting, setIsExtracting] = useState(false);
   const cancellationRef = useRef(false);
@@ -43,8 +43,12 @@ export default function BatchExtractor() {
   const [startTime, setStartTime] = useState<number | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [remainingTime, setRemainingTime] = useState<number | null>(null);
+  const [totalTime, setTotalTime] = useState<number | null>(null);
   const valuesetTimesRef = useRef<number[]>([]);
   const lastRemainingTimeCalcRef = useRef<number | null>(null);
+  const startTimeRef = useRef<number | null>(null);
+  const processingStatusRef = useRef<ProcessingStatus | null>(null);
+  const selectedReportsRef = useRef<EmisReport[]>([]);
 
   // Load existing parsed data on mount
   useEffect(() => {
@@ -86,42 +90,66 @@ export default function BatchExtractor() {
     .sort((a, b) => a.searchName.localeCompare(b.searchName));
   const totalValueSets = selectedReports.reduce((sum, r) => sum + r.valueSets.length, 0);
 
-  // Timer effect
+  // Reset status when selected reports change (allows new extraction)
   useEffect(() => {
-    if (status !== 'processing' || !startTime) {
+    if (status === 'completed' && selectedReports.length > 0) {
+      // Check if the selected reports have changed from what was extracted
+      const currentReportIds = new Set(selectedReports.map(r => r.id));
+      const extractedReportIds = extractedData?.reports.map(r => r.report_id) || [];
+      const extractedSet = new Set(extractedReportIds);
+      
+      // If selection changed, reset to idle to allow new extraction
+      const setsMatch = currentReportIds.size === extractedSet.size && 
+        Array.from(currentReportIds).every(id => extractedSet.has(id));
+      
+      if (!setsMatch) {
+        setStatus('idle');
+        setExtractedData(null);
+        setTotalTime(null);
+      }
+    }
+  }, [selectedReports, status, extractedData]);
+
+  // Update refs when state changes
+  useEffect(() => {
+    processingStatusRef.current = processingStatus;
+  }, [processingStatus]);
+
+  useEffect(() => {
+    selectedReportsRef.current = selectedReports;
+  }, [selectedReports]);
+
+  // Timer effect - use refs to avoid recreating interval on every state change
+  useEffect(() => {
+    if (status !== 'processing' || !startTimeRef.current) {
       return;
     }
 
     const interval = setInterval(() => {
-      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      if (!startTimeRef.current) return;
+      
+      const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
       setElapsedTime(elapsed);
 
       // Calculate remaining time based on average time per valueset
-      if (processingStatus && valuesetTimesRef.current.length > 0) {
+      const currentProcessingStatus = processingStatusRef.current;
+      const currentSelectedReports = selectedReportsRef.current;
+      
+      if (currentProcessingStatus && valuesetTimesRef.current.length > 0) {
         const avgTimePerValueSet = valuesetTimesRef.current.reduce((a, b) => a + b, 0) / valuesetTimesRef.current.length;
-        const totalValueSets = selectedReports.reduce((sum, r) => sum + r.valueSets.length, 0);
+        const totalValueSets = currentSelectedReports.reduce((sum, r) => sum + r.valueSets.length, 0);
         
         // Calculate completed valuesets: all in previous reports + current valueset (minus 1 since we're currently processing it)
         let completedValueSets = 0;
-        for (let i = 0; i < processingStatus.currentReport - 1; i++) {
-          completedValueSets += selectedReports[i]?.valueSets.length || 0;
+        for (let i = 0; i < currentProcessingStatus.currentReport - 1; i++) {
+          completedValueSets += currentSelectedReports[i]?.valueSets.length || 0;
         }
-        completedValueSets += processingStatus.currentValueSet - 1; // -1 because we're currently processing this one
+        completedValueSets += currentProcessingStatus.currentValueSet - 1; // -1 because we're currently processing this one
         
         const remainingValueSets = totalValueSets - completedValueSets;
         if (remainingValueSets > 0) {
           const estimatedSecondsRemaining = Math.ceil(remainingValueSets * avgTimePerValueSet);
-          
-          // Only recalculate if we don't have a value yet, or if the valueset count has changed (new timing data)
-          const currentValuesetCount = valuesetTimesRef.current.length;
-          if (lastRemainingTimeCalcRef.current === null || 
-              lastRemainingTimeCalcRef.current !== currentValuesetCount) {
-            setRemainingTime(Math.max(0, estimatedSecondsRemaining));
-            lastRemainingTimeCalcRef.current = currentValuesetCount;
-          } else {
-            // Count down the existing estimate
-            setRemainingTime((prev) => prev !== null ? Math.max(0, prev - 1) : null);
-          }
+          setRemainingTime(Math.max(0, estimatedSecondsRemaining));
         } else {
           setRemainingTime(0);
         }
@@ -129,7 +157,7 @@ export default function BatchExtractor() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [status, startTime, processingStatus, selectedReports]);
+  }, [status]); // Only depend on status, not processingStatus or selectedReports
 
   const formatTime = (seconds: number): string => {
     const hours = Math.floor(seconds / 3600);
@@ -146,13 +174,17 @@ export default function BatchExtractor() {
     if (selectedReports.length === 0) return;
 
     setIsExtracting(true);
+    setContextIsExtracting(true);
     cancellationRef.current = false;
     setStatus('processing');
     setProgress(0);
     setErrorMessage('');
-    setStartTime(Date.now());
+    const now = Date.now();
+    setStartTime(now);
+    startTimeRef.current = now;
     setElapsedTime(0);
     setRemainingTime(null);
+    setTotalTime(null);
     valuesetTimesRef.current = [];
     lastRemainingTimeCalcRef.current = null;
 
@@ -165,6 +197,7 @@ export default function BatchExtractor() {
       exceptions: [],
     };
 
+    let extractionCompleted = false;
     try {
       const totalReports = selectedReports.length;
       let completedReports = 0;
@@ -175,6 +208,7 @@ export default function BatchExtractor() {
           setStatus('idle');
           setProcessingStatus(null);
           setIsExtracting(false);
+          setContextIsExtracting(false);
           return;
         }
         completedReports++;
@@ -347,8 +381,12 @@ export default function BatchExtractor() {
       }
 
       setExtractedData(normalizedData);
-      setStatus('completed');
       setProcessingStatus(null);
+      // Store final elapsed time - calculate one final time to ensure accuracy using ref
+      const finalTime = startTimeRef.current ? Math.floor((Date.now() - startTimeRef.current) / 1000) : (elapsedTime || 0);
+      setTotalTime(finalTime);
+      setStatus('completed');
+      extractionCompleted = true;
     } catch (error) {
       if (!cancellationRef.current) {
         console.error('Batch extraction error:', error);
@@ -358,10 +396,22 @@ export default function BatchExtractor() {
       }
     } finally {
       setIsExtracting(false);
+      setContextIsExtracting(false);
       cancellationRef.current = false;
-      setStartTime(null);
-      setElapsedTime(0);
-      setRemainingTime(null);
+      // Only clear timing if not completed (preserve totalTime for completed extractions)
+      if (!extractionCompleted) {
+        setStartTime(null);
+        startTimeRef.current = null;
+        setElapsedTime(0);
+        setRemainingTime(null);
+        setTotalTime(null);
+      } else {
+        // Clear these but keep totalTime
+        setStartTime(null);
+        startTimeRef.current = null;
+        setElapsedTime(0);
+        setRemainingTime(null);
+      }
       valuesetTimesRef.current = [];
       lastRemainingTimeCalcRef.current = null;
     }
@@ -372,6 +422,7 @@ export default function BatchExtractor() {
     setStatus('idle');
     setProcessingStatus(null);
     setIsExtracting(false);
+    setContextIsExtracting(false);
     setProgress(0);
     setStartTime(null);
     setElapsedTime(0);
@@ -622,6 +673,9 @@ export default function BatchExtractor() {
                   <h3 className="font-semibold text-green-900">Extraction Complete</h3>
                   <p className="text-sm text-green-700">
                     Successfully processed {selectedReports.length} reports
+                    {totalTime !== null && totalTime >= 0 && (
+                      <> in {formatTime(totalTime)}</>
+                    )}
                   </p>
                 </div>
               </div>
@@ -635,7 +689,7 @@ export default function BatchExtractor() {
                   <div className="font-semibold">{extractedData.valuesets.length}</div>
                 </div>
                 <div className="bg-white/50 p-2 rounded">
-                  <div className="text-xs text-muted-foreground">Concepts</div>
+                  <div className="text-xs text-muted-foreground">Expanded Concepts</div>
                   <div className="font-semibold">{extractedData.expandedConcepts.length}</div>
                 </div>
                 <div className="bg-white/50 p-2 rounded">
