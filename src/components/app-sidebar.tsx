@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import {
   Sidebar,
   SidebarContent,
@@ -8,25 +9,40 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
 } from '@/components/ui/sidebar';
+import { Button } from '@/components/ui/button';
 import XmlUploader from '@/components/xml-uploader';
 import FolderTreeNavigation from '@/components/folder-tree-navigation';
 import BatchReportSelector from '@/components/batch-report-selector';
 import { Separator } from '@/components/ui/separator';
 import ModeToggle from '@/components/mode-toggle';
 import { useAppMode } from '@/contexts/AppModeContext';
+import { CodeExpansionDocs } from '@/components/code-expansion-docs';
+import { HelpCircle } from 'lucide-react';
 
 export function AppSidebar() {
   const { mode } = useAppMode();
+  const [docsOpen, setDocsOpen] = useState(false);
 
   return (
     <Sidebar collapsible="icon" style={{ '--sidebar-width': '28rem' } as React.CSSProperties}>
       <SidebarHeader>
         <div className="px-2 py-4 space-y-3">
-          <div>
-            <h1 className="text-lg font-bold">EMIS XML Analyser</h1>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              SNOMED CT Code Expansion
-            </p>
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex-1 min-w-0">
+              <h1 className="text-lg font-bold">EMIS XML Analyser</h1>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                SNOMED CT Code Expansion
+              </p>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0"
+              onClick={() => setDocsOpen(true)}
+              title="View code expansion documentation"
+            >
+              <HelpCircle className="h-4 w-4" />
+            </Button>
           </div>
           <ModeToggle />
         </div>
@@ -52,6 +68,7 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
+      <CodeExpansionDocs open={docsOpen} onOpenChange={setDocsOpen} />
     </Sidebar>
   );
 }
