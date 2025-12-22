@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Search, CheckSquare, Square, ChevronDown, ChevronRight, Folder } from 'lucide-react';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
 import { loadParsedXmlData } from '@/lib/storage';
 import { buildFolderTree, getAllReportsInFolder, FolderNode } from '@/lib/folder-tree-utils';
 
@@ -166,54 +166,94 @@ export default function BatchReportSelector() {
     const isFullySelected = isFolderFullySelected(node);
     const isPartiallySelected = isFolderPartiallySelected(node);
 
+    // For root node, render children directly without wrapper div
+    if (node.name === 'Root') {
+      const childFolders = Array.from(node.children.values())
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((childNode) => renderFolder(childNode, level + 1))
+        .filter(Boolean);
+      
+      const rootReports = [...node.reports]
+        .sort((a, b) => a.searchName.localeCompare(b.searchName))
+        .map((report) => (
+          <div
+            key={report.id}
+            className="flex items-start gap-2 p-1.5 rounded-md hover:bg-accent/50 cursor-pointer transition-colors"
+            style={{ paddingLeft: `${(level + 1) * 12 + 6}px` }}
+            onClick={() => toggleReportSelection(report.id)}
+          >
+            <Checkbox
+              checked={isReportSelected(report.id)}
+              onCheckedChange={() => toggleReportSelection(report.id)}
+              onClick={(e) => e.stopPropagation()}
+              className="mt-0.5 flex-shrink-0"
+            />
+            <div className="flex-1 min-w-0">
+              <div className="font-medium text-xs truncate">{report.searchName}</div>
+              <div className="text-xs text-muted-foreground mt-0.5">
+                {report.valueSets.length} ValueSet{report.valueSets.length !== 1 ? 's' : ''}
+              </div>
+            </div>
+          </div>
+        ));
+
+      if (childFolders.length === 0 && rootReports.length === 0) return null;
+
+      return (
+        <>
+          {childFolders}
+          {rootReports}
+        </>
+      );
+    }
+
+    // For non-root nodes, render with wrapper div
     return (
       <div key={node.path} className="space-y-1">
         {/* Folder header */}
-        {node.name !== 'Root' && (
+        <div
+          className="flex items-center gap-2 p-1.5 rounded-md hover:bg-accent/50"
+          style={{ paddingLeft: `${level * 12 + 6}px` }}
+        >
+          <Checkbox
+            checked={isFullySelected || (isPartiallySelected ? 'indeterminate' : false)}
+            onCheckedChange={() => toggleFolderSelection(node)}
+            onClick={(e) => e.stopPropagation()}
+            className="flex-shrink-0"
+          />
           <div
-            className="flex items-center gap-2 p-1.5 rounded-md hover:bg-accent/50"
-            style={{ paddingLeft: `${level * 12 + 6}px` }}
+            className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (hasChildren) {
+                toggleFolder(node.path);
+              }
+            }}
           >
-            <Checkbox
-              checked={isFullySelected || (isPartiallySelected ? 'indeterminate' : false)}
-              onCheckedChange={() => toggleFolderSelection(node)}
-              onClick={(e) => e.stopPropagation()}
-              className="flex-shrink-0"
-            />
-            <div
-              className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (hasChildren) {
-                  toggleFolder(node.path);
-                }
-              }}
-            >
-              {hasChildren && (
-                isExpanded ? (
-                  <ChevronDown className="h-3.5 w-3.5 flex-shrink-0" />
-                ) : (
-                  <ChevronRight className="h-3.5 w-3.5 flex-shrink-0" />
-                )
-              )}
-              <Folder className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-              <span className="text-sm font-medium truncate">{node.name}</span>
-              <Badge variant="secondary" className="text-xs h-4 px-1 flex-shrink-0">
-                {reportCount}
-              </Badge>
-            </div>
+            {hasChildren && (
+              isExpanded ? (
+                <ChevronDown className="h-3.5 w-3.5 flex-shrink-0" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5 flex-shrink-0" />
+              )
+            )}
+            <Folder className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+            <span className="text-sm font-medium truncate">{node.name}</span>
+            <Badge variant="secondary" className="text-xs h-4 px-1 flex-shrink-0">
+              {reportCount}
+            </Badge>
           </div>
-        )}
+        </div>
 
-        {/* Child folders - always show for Root, only when expanded for others */}
-        {(node.name === 'Root' || isExpanded) && Array.from(node.children.values())
+        {/* Child folders - only when expanded */}
+        {isExpanded && Array.from(node.children.values())
           .sort((a, b) => a.name.localeCompare(b.name))
           .map((childNode) =>
             renderFolder(childNode, level + 1)
           )}
 
-        {/* Reports in this folder - always show for Root, only when expanded for others */}
-        {(node.name === 'Root' || isExpanded) && [...node.reports]
+        {/* Reports in this folder - only when expanded */}
+        {isExpanded && [...node.reports]
           .sort((a, b) => a.searchName.localeCompare(b.searchName))
           .map((report) => (
           <div
@@ -252,17 +292,19 @@ export default function BatchReportSelector() {
     <div className="space-y-3">
       {/* Search */}
       <div className="relative">
-        <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+        <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
         <Input
-          placeholder="Search reports..."
+          placeholder="Search..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="pl-8 h-9 text-sm"
+          className="pl-8 h-8 text-sm"
         />
       </div>
 
+      <Separator />
+
       {/* Select/Deselect All */}
-      <div className="flex items-center justify-between text-sm">
+      <div className="flex items-center justify-between text-xs px-2">
         <span className="text-muted-foreground">
           {selectedReportIds.size} of {reports.length} selected
         </span>
@@ -287,42 +329,40 @@ export default function BatchReportSelector() {
       </div>
 
       {/* Report List */}
-      <ScrollArea className="h-[calc(100vh-320px)]">
-        {searchQuery.trim() ? (
-          /* Flat filtered list when searching */
-          <div className="space-y-1">
-            {filteredReports.map((report) => (
-              <div
-                key={report.id}
-                className="flex items-start gap-2 p-2 rounded-md hover:bg-accent/50 cursor-pointer transition-colors"
-                onClick={() => toggleReportSelection(report.id)}
-              >
-                <Checkbox
-                  checked={isReportSelected(report.id)}
-                  onCheckedChange={() => toggleReportSelection(report.id)}
-                  className="mt-0.5"
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium text-sm truncate">{report.searchName}</div>
-                  <div className="text-xs text-muted-foreground mt-0.5">
-                    {report.valueSets.length} ValueSet{report.valueSets.length !== 1 ? 's' : ''}
-                  </div>
+      {searchQuery.trim() ? (
+        /* Flat filtered list when searching */
+        <div className="space-y-0.5 overflow-y-auto pr-2">
+          {filteredReports.map((report) => (
+            <div
+              key={report.id}
+              className="flex items-start gap-2 p-2 rounded-md hover:bg-accent/50 cursor-pointer transition-colors"
+              onClick={() => toggleReportSelection(report.id)}
+            >
+              <Checkbox
+                checked={isReportSelected(report.id)}
+                onCheckedChange={() => toggleReportSelection(report.id)}
+                className="mt-0.5"
+              />
+              <div className="flex-1 min-w-0">
+                <div className="font-medium text-sm truncate">{report.searchName}</div>
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  {report.valueSets.length} ValueSet{report.valueSets.length !== 1 ? 's' : ''}
                 </div>
               </div>
-            ))}
-            {filteredReports.length === 0 && (
-              <div className="text-sm text-muted-foreground text-center py-8">
-                No reports match &quot;{searchQuery}&quot;
-              </div>
-            )}
-          </div>
-        ) : (
-          /* Folder tree when not searching */
-          <div className="space-y-1">
-            {renderFolder(folderTree)}
-          </div>
-        )}
-      </ScrollArea>
+            </div>
+          ))}
+          {filteredReports.length === 0 && (
+            <div className="text-sm text-muted-foreground text-center py-8">
+              No reports match &quot;{searchQuery}&quot;
+            </div>
+          )}
+        </div>
+      ) : (
+        /* Folder tree when not searching */
+        <div className="space-y-0.5 overflow-y-auto pr-2">
+          {renderFolder(folderTree)}
+        </div>
+      )}
     </div>
   );
 }
