@@ -60,11 +60,14 @@ export default function BatchExtractor() {
       .then((minimalData) => {
         if (minimalData && minimalData.reports) {
           setReports(minimalData.reports);
+          setIsCheckingXml(false);
+        } else {
+          setIsCheckingXml(false);
         }
-        setIsCheckingXml(false);
       })
       .catch((error) => {
         console.error('Failed to load stored data:', error);
+        setReports([]);
         setIsCheckingXml(false);
       });
   }, []);

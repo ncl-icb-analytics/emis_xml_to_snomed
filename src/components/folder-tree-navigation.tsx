@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { Input } from '@/components/ui/input';
-import { loadParsedXmlData, saveParsedXmlData, clearParsedXmlData } from '@/lib/storage';
+import { loadParsedXmlData, clearParsedXmlData } from '@/lib/storage';
 import {
   ChevronRight,
   Folder,
@@ -49,45 +49,8 @@ export default function FolderTreeNavigation() {
       const customEvent = event as CustomEvent<EmisXmlDocument>;
       setParsedData(customEvent.detail);
 
-      try {
-        const reports = customEvent.detail.reports;
-        const minimalReports: any[] = [];
-
-        const batchSize = 100;
-        for (let i = 0; i < reports.length; i += batchSize) {
-          const batch = reports.slice(i, i + batchSize);
-          minimalReports.push(...batch.map((report) => ({
-            id: report.id,
-            name: report.name,
-            searchName: report.searchName,
-            rule: report.rule,
-            valueSets: report.valueSets.map((vs) => ({
-              id: vs.id,
-              codeSystem: vs.codeSystem,
-              values: vs.values.map((v) => ({
-                code: v.code,
-                includeChildren: v.includeChildren,
-                isRefset: v.isRefset,
-                displayName: v.displayName && v.displayName !== v.code ? v.displayName : undefined,
-              })),
-              exceptions: vs.exceptions.map((e) => e.code),
-            })),
-          })));
-        }
-
-        const minimalData = {
-          namespace: customEvent.detail.namespace,
-          parsedAt: customEvent.detail.parsedAt,
-          reports: minimalReports,
-        };
-
-        // Save to IndexedDB (handles large files much better than sessionStorage)
-        saveParsedXmlData(minimalData).catch((error) => {
-          console.error('Failed to save parsed XML data:', error);
-        });
-      } catch (error) {
-        console.error('Error storing parsed XML data:', error);
-      }
+      // Note: xml-uploader now handles saving to IndexedDB before dispatching this event
+      // This ensures data is available immediately when components mount after mode switch
 
       setCurrentPath([]);
       setSelectedReportId(null);

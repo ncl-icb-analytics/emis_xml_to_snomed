@@ -6,7 +6,7 @@ import { Upload, FileText, Loader2, X } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { parseEmisXml } from '@/lib/xml-parser';
 import { Button } from '@/components/ui/button';
-import { hasParsedXmlData, clearParsedXmlData } from '@/lib/storage';
+import { hasParsedXmlData, clearParsedXmlData, saveParsedXmlData } from '@/lib/storage';
 
 export default function XmlUploader() {
   const [isProcessing, setIsProcessing] = useState(false);
@@ -52,6 +52,32 @@ export default function XmlUploader() {
         // Parse XML client-side to avoid upload size limits
         const xmlContent = await file.text();
         const parsedData = await parseEmisXml(xmlContent);
+
+        // Save to IndexedDB before dispatching event
+        // This ensures data is available when components try to load it on mode switch
+        const minimalData = {
+          namespace: parsedData.namespace,
+          parsedAt: parsedData.parsedAt,
+          reports: parsedData.reports.map((report) => ({
+            id: report.id,
+            name: report.name,
+            searchName: report.searchName,
+            rule: report.rule,
+            valueSets: report.valueSets.map((vs) => ({
+              id: vs.id,
+              codeSystem: vs.codeSystem,
+              values: vs.values.map((v) => ({
+                code: v.code,
+                includeChildren: v.includeChildren,
+                isRefset: v.isRefset,
+                displayName: v.displayName && v.displayName !== v.code ? v.displayName : undefined,
+              })),
+              exceptions: vs.exceptions.map((e) => e.code),
+            })),
+          })),
+        };
+
+        await saveParsedXmlData(minimalData);
 
         window.dispatchEvent(
           new CustomEvent('xml-parsed', { detail: parsedData })
