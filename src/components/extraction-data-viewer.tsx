@@ -21,6 +21,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Search } from 'lucide-react';
+import { normalizedTableColumns } from '@/lib/normalized-table-columns';
 
 interface NormalizedTables {
   reports: any[];
@@ -164,65 +165,32 @@ export function ExtractionDataViewer({ open, onOpenChange, data }: ExtractionDat
           </TabsList>
 
           <TabsContent value="reports" className="mt-4">
-            {renderTable('reports', [
-              { key: 'report_id', label: 'Report ID' },
-              { key: 'report_name', label: 'Name' },
-              { key: 'search_name', label: 'Search Name' },
-              { key: 'folder_path', label: 'Folder' },
-              { key: 'xml_file_name', label: 'XML File' },
-              { key: 'parsed_at', label: 'Parsed At' },
-            ], ['report_name', 'search_name', 'folder_path'],
+            {renderTable('reports', normalizedTableColumns.reports, ['report_name', 'search_name', 'folder_path'],
             'High-level information about each extracted report, including source file and folder path.')}
           </TabsContent>
 
           <TabsContent value="valuesets" className="mt-4">
-            {renderTable('valuesets', [
-              { key: 'valueset_id', label: 'ValueSet ID' },
-              { key: 'report_id', label: 'Report ID' },
-              { key: 'valueset_friendly_name', label: 'Name' },
-              { key: 'code_system', label: 'Code System' },
-              { key: 'expansion_error', label: 'Error' },
-            ], ['valueset_friendly_name', 'code_system', 'expansion_error'],
+            {renderTable('valuesets', normalizedTableColumns.valuesets, ['valueset_friendly_name', 'code_system', 'expansion_error'],
             'ValueSets extracted from each report. Each ValueSet contains a collection of codes to be expanded.')}
           </TabsContent>
 
           <TabsContent value="originalCodes" className="mt-4">
-            {renderTable('originalCodes', [
-              { key: 'valueset_id', label: 'ValueSet ID' },
-              { key: 'original_code', label: 'Code' },
-              { key: 'display_name', label: 'Display' },
-              { key: 'code_system', label: 'System' },
-              { key: 'translated_to_snomed_code', label: 'Translated To' },
-            ], ['original_code', 'display_name', 'translated_to_snomed_code'],
+            {renderTable('originalCodes', normalizedTableColumns.originalCodes, ['original_code', 'display_name', 'translated_to_snomed_code'],
             'Original codes from the XML, including ConceptMap translations and historical resolution results.')}
           </TabsContent>
 
           <TabsContent value="expandedConcepts" className="mt-4">
-            {renderTable('expandedConcepts', [
-              { key: 'valueset_id', label: 'ValueSet ID' },
-              { key: 'snomed_code', label: 'SNOMED Code' },
-              { key: 'display', label: 'Display' },
-              { key: 'source', label: 'Source' },
-            ], ['snomed_code', 'display'],
+            {renderTable('expandedConcepts', normalizedTableColumns.expandedConcepts, ['snomed_code', 'display'],
             'Expanded SNOMED CT concepts resulting from ECL queries and refset expansion (including descendants).')}
           </TabsContent>
 
           <TabsContent value="failedCodes" className="mt-4">
-            {renderTable('failedCodes', [
-              { key: 'valueset_id', label: 'ValueSet ID' },
-              { key: 'original_code', label: 'Code' },
-              { key: 'display_name', label: 'Display' },
-              { key: 'code_system', label: 'System' },
-              { key: 'reason', label: 'Failure Reason' },
-            ], ['original_code', 'display_name', 'reason'],
+            {renderTable('failedCodes', normalizedTableColumns.failedCodes, ['original_code', 'display_name', 'reason'],
             'Codes that could not be translated or resolved, along with the reason for failure.')}
           </TabsContent>
 
           <TabsContent value="exceptions" className="mt-4">
-            {renderTable('exceptions', [
-              { key: 'valueset_id', label: 'ValueSet ID' },
-              { key: 'excluded_code', label: 'Excluded Code' },
-            ], ['excluded_code'],
+            {renderTable('exceptions', normalizedTableColumns.exceptions, ['excluded_code'],
             'Codes explicitly excluded from ValueSets via exception rules in the XML.')}
           </TabsContent>
         </Tabs>

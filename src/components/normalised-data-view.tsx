@@ -15,6 +15,7 @@ import {
 import { Download } from 'lucide-react';
 import { ExpandedCodeSet, EmisReport } from '@/lib/types';
 import { downloadNormalizedDataZip, NormalizedTables } from '@/lib/zip-utils';
+import { normalizedTableColumns } from '@/lib/normalized-table-columns';
 
 interface NormalisedDataViewProps {
   report: EmisReport;
@@ -66,8 +67,8 @@ export default function NormalisedDataView({ report, expandedCodes }: Normalised
         original_code: oc.originalCode,
         display_name: oc.displayName,
         code_system: oc.codeSystem,
-        include_children: oc.includeChildren ? 'true' : 'false',
-        is_refset: oc.isRefset ? 'true' : 'false',
+        include_children: oc.includeChildren || false,
+        is_refset: oc.isRefset || false,
         translated_to_snomed_code: oc.translatedTo || '',
         translated_to_display: oc.translatedToDisplay || '',
       })) || []
@@ -81,7 +82,7 @@ export default function NormalisedDataView({ report, expandedCodes }: Normalised
         snomed_code: concept.code,
         display: concept.display,
         source: concept.source || 'terminology_server', // Use actual source (rf2_file or terminology_server)
-        exclude_children: concept.excludeChildren ? 'true' : 'false',
+        exclude_children: concept.excludeChildren || false,
       }))
     ) || [];
 

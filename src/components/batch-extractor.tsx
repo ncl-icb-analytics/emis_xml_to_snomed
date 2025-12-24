@@ -7,13 +7,14 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { Package, Download, FileText, X, Loader2, CheckCircle2, AlertCircle, XCircle } from 'lucide-react';
+import { Package, Download, FileText, X, Loader2, CheckCircle2, AlertCircle, XCircle, Database } from 'lucide-react';
 import { loadParsedXmlData } from '@/lib/storage';
 import { ExtractionFileList } from '@/components/extraction-file-list';
 import { ExtractionDataModel } from '@/components/extraction-data-model';
 import { expandValueSet } from '@/lib/valueset-expansion';
 import { formatTime } from '@/lib/time-utils';
 import { convertToCSV } from '@/lib/csv-utils';
+import { ExtractionDataViewer } from '@/components/extraction-data-viewer';
 
 interface ProcessingStatus {
   currentReport: number;
@@ -48,6 +49,7 @@ export default function BatchExtractor() {
   const [remainingTime, setRemainingTime] = useState<number | null>(null);
   const [totalTime, setTotalTime] = useState<number | null>(null);
   const [isCheckingXml, setIsCheckingXml] = useState(true);
+  const [isDataViewerOpen, setIsDataViewerOpen] = useState(false);
   const valuesetTimesRef = useRef<number[]>([]);
   const lastRemainingTimeCalcRef = useRef<number | null>(null);
   const startTimeRef = useRef<number | null>(null);
@@ -296,7 +298,6 @@ export default function BatchExtractor() {
                     display: concept.display,
                     source: concept.source || 'terminology_server', // Use actual source (rf2_file or terminology_server)
                     exclude_children: concept.excludeChildren || false,
-                    is_refset: concept.isRefset || false,
                   });
                 });
 
@@ -634,6 +635,10 @@ export default function BatchExtractor() {
                   <Download className="mr-2 h-4 w-4" />
                   Download ZIP Bundle
                 </Button>
+                <Button onClick={() => setIsDataViewerOpen(true)} variant="outline">
+                  <Database className="mr-2 h-4 w-4" />
+                  View Data
+                </Button>
               </div>
             </div>
           </CardContent>
@@ -670,6 +675,15 @@ export default function BatchExtractor() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Data Viewer Dialog */}
+      {extractedData && (
+        <ExtractionDataViewer
+          open={isDataViewerOpen}
+          onOpenChange={setIsDataViewerOpen}
+          data={extractedData}
+        />
+      )}
     </div>
   );
 }
