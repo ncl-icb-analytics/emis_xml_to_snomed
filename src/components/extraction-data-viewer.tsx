@@ -60,7 +60,7 @@ export function ExtractionDataViewer({ open, onOpenChange, data }: ExtractionDat
 
   const renderTable = (
     tableName: keyof NormalizedTables,
-    columns: { key: string; label: string }[],
+    columns: readonly { key: string; label: string }[],
     searchFields: string[],
     description: string
   ) => {
