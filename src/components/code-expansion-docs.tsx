@@ -398,23 +398,39 @@ export function CodeExpansionDocs({ open, onOpenChange }: CodeExpansionDocsProps
 
           <Separator />
 
-          {/* Step 2: Refset Detection (for untranslated codes) */}
+          {/* Step 2: Historical Resolution */}
           <section>
             <div className="flex items-start gap-3 mb-3">
               <Badge variant="outline" className="h-8 w-8 rounded-full flex items-center justify-center shrink-0 mt-0.5">
                 2
               </Badge>
               <div className="flex-1">
-                <h3 className="text-lg font-semibold mb-2">Refset Detection (for Untranslated Codes)</h3>
+                <h3 className="text-lg font-semibold mb-2">Historical Concept Resolution</h3>
                 <p className="text-sm text-muted-foreground mb-3">
-                  Codes that failed ConceptMap translation are checked against local RF2 refset files to see if they
-                  are refset IDs that need expansion.
+                  All SNOMED CT codes (whether translated, original, or detected as refsets) are checked against the
+                  terminology server to resolve historical/inactive concepts to their current active equivalents.
                 </p>
-                <div className="flex items-start gap-2 ml-4">
-                  <Code className="h-4 w-4 text-blue-600 mt-0.5 shrink-0" />
-                  <p className="text-xs text-muted-foreground">
-                    If found in RF2, the code is marked as a refset and will be expanded from RF2 files in the next step.
-                  </p>
+                <div className="space-y-2 ml-4">
+                  <div className="flex items-start gap-2">
+                    <Database className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                    <div>
+                      <p className="text-sm font-medium">FHIR $lookup Operation</p>
+                      <p className="text-xs text-muted-foreground">
+                        Uses FHIR <code className="text-xs bg-muted px-1 py-0.5 rounded">$lookup</code> operation to find
+                        the current concept ID and display name for historical concepts.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="text-sm font-medium">Applied to All Codes</p>
+                      <p className="text-xs text-muted-foreground">
+                        This step happens for ALL codes regardless of whether they were translated by ConceptMap or not.
+                        Even refset IDs detected from RF2 files go through historical resolution.
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -422,24 +438,32 @@ export function CodeExpansionDocs({ open, onOpenChange }: CodeExpansionDocsProps
 
           <Separator />
 
-          {/* Step 3: Historical Resolution */}
+          {/* Step 3: Refset Detection */}
           <section>
             <div className="flex items-start gap-3 mb-3">
               <Badge variant="outline" className="h-8 w-8 rounded-full flex items-center justify-center shrink-0 mt-0.5">
                 3
               </Badge>
               <div className="flex-1">
-                <h3 className="text-lg font-semibold mb-2">Historical Concept Resolution</h3>
+                <h3 className="text-lg font-semibold mb-2">Refset Detection</h3>
                 <p className="text-sm text-muted-foreground mb-3">
-                  All SNOMED CT codes (translated or original) are checked against the terminology server to resolve
-                  historical/inactive concepts to their current active equivalents.
+                  The system identifies which codes are refsets that need special handling through two methods:
                 </p>
-                <div className="flex items-start gap-2 ml-4">
-                  <Database className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
-                  <p className="text-xs text-muted-foreground">
-                    Uses FHIR <code className="text-xs bg-muted px-1 py-0.5 rounded">$lookup</code> operation to find
-                    the current concept ID and display name for historical concepts.
-                  </p>
+                <div className="space-y-3 ml-4">
+                  <div className="border-l-2 border-blue-500 pl-3">
+                    <p className="text-sm font-medium mb-1">From XML Metadata</p>
+                    <p className="text-xs text-muted-foreground">
+                      Codes marked with <code className="text-xs bg-muted px-1 py-0.5 rounded">isRefset=true</code> in the XML
+                      are identified as refsets.
+                    </p>
+                  </div>
+                  <div className="border-l-2 border-orange-500 pl-3">
+                    <p className="text-sm font-medium mb-1">RF2 Fallback Detection</p>
+                    <p className="text-xs text-muted-foreground">
+                      Codes that failed ConceptMap translation are checked against local RF2 refset files. If found,
+                      they're marked as refsets and will be expanded from RF2 files.
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -447,29 +471,11 @@ export function CodeExpansionDocs({ open, onOpenChange }: CodeExpansionDocsProps
 
           <Separator />
 
-          {/* Step 4: Refset Detection (from XML) */}
+          {/* Step 4: Refset Expansion */}
           <section>
             <div className="flex items-start gap-3 mb-3">
               <Badge variant="outline" className="h-8 w-8 rounded-full flex items-center justify-center shrink-0 mt-0.5">
                 4
-              </Badge>
-              <div className="flex-1">
-                <h3 className="text-lg font-semibold mb-2">Refset Detection (from XML)</h3>
-                <p className="text-sm text-muted-foreground mb-3">
-                  Codes marked with <code className="text-xs bg-muted px-1 py-0.5 rounded">isRefset=true</code> in the XML
-                  are identified as refsets that need expansion.
-                </p>
-              </div>
-            </div>
-          </section>
-
-          <Separator />
-
-          {/* Step 5: Refset Expansion */}
-          <section>
-            <div className="flex items-start gap-3 mb-3">
-              <Badge variant="outline" className="h-8 w-8 rounded-full flex items-center justify-center shrink-0 mt-0.5">
-                5
               </Badge>
               <div className="flex-1">
                 <h3 className="text-lg font-semibold mb-2">Refset Expansion</h3>
@@ -514,11 +520,11 @@ export function CodeExpansionDocs({ open, onOpenChange }: CodeExpansionDocsProps
 
           <Separator />
 
-          {/* Step 6: Non-Refset Expansion */}
+          {/* Step 5: Non-Refset Expansion */}
           <section>
             <div className="flex items-start gap-3 mb-3">
               <Badge variant="outline" className="h-8 w-8 rounded-full flex items-center justify-center shrink-0 mt-0.5">
-                6
+                5
               </Badge>
               <div className="flex-1">
                 <h3 className="text-lg font-semibold mb-2">Expansion</h3>
@@ -560,11 +566,11 @@ export function CodeExpansionDocs({ open, onOpenChange }: CodeExpansionDocsProps
 
           <Separator />
 
-          {/* Step 7: SCT_CONST Handling */}
+          {/* Step 6: SCT_CONST Handling */}
           <section>
             <div className="flex items-start gap-3 mb-3">
               <Badge variant="outline" className="h-8 w-8 rounded-full flex items-center justify-center shrink-0 mt-0.5">
-                7
+                6
               </Badge>
               <div className="flex-1">
                 <h3 className="text-lg font-semibold mb-2">SCT_CONST (UK Products)</h3>
@@ -678,9 +684,10 @@ export function CodeExpansionDocs({ open, onOpenChange }: CodeExpansionDocsProps
                 <div>
                   <p className="text-sm font-medium">Client-Side Result Storage</p>
                   <p className="text-xs text-muted-foreground">
-                    Results are stored entirely on the client side—in React state for immediate display, and in IndexedDB
-                    for persistence. Each completed value set expansion is immediately available in the UI, providing
-                    progressive feedback as extraction proceeds.
+                    Results are stored in React state for immediate display during the extraction session. Each completed
+                    value set expansion is immediately available in the UI, providing progressive feedback as extraction
+                    proceeds. Note: Extraction results are not currently persisted to IndexedDB—only the parsed XML structure
+                    is saved locally.
                   </p>
                 </div>
               </div>
@@ -785,23 +792,25 @@ export function CodeExpansionDocs({ open, onOpenChange }: CodeExpansionDocsProps
               <div className="flex items-center gap-2">
                 <Badge variant="outline" className="shrink-0">EMIS Code</Badge>
                 <ArrowRight className="h-4 w-4 text-muted-foreground" />
-                <span className="text-muted-foreground">ConceptMap Translation</span>
+                <span className="text-muted-foreground text-xs">ConceptMap</span>
                 <ArrowRight className="h-4 w-4 text-muted-foreground" />
-                <span className="text-muted-foreground">RF2 Refset Check</span>
+                <span className="text-muted-foreground text-xs">Historical</span>
                 <ArrowRight className="h-4 w-4 text-muted-foreground" />
-                <span className="text-muted-foreground">Historical Resolution</span>
-                <ArrowRight className="h-4 w-4 text-muted-foreground" />
-                <Badge variant="outline" className="shrink-0">SNOMED Code</Badge>
+                <Badge variant="outline" className="shrink-0">Resolved Code</Badge>
               </div>
               <div className="flex items-center gap-2 ml-8">
                 <ArrowRight className="h-4 w-4 text-muted-foreground rotate-90" />
               </div>
               <div className="flex items-center gap-2 ml-8">
-                <Badge variant="secondary" className="shrink-0">Is Refset?</Badge>
+                <span className="text-xs text-muted-foreground">Refset Detection (XML + RF2)</span>
+              </div>
+              <div className="flex items-center gap-2 ml-8">
+                <ArrowRight className="h-4 w-4 text-muted-foreground rotate-90" />
+              </div>
+              <div className="flex items-center gap-2 ml-8">
+                <Badge variant="secondary" className="shrink-0 text-xs">Is Refset?</Badge>
                 <ArrowRight className="h-4 w-4 text-muted-foreground" />
-                <span className="text-muted-foreground">RF2 File</span>
-                <span className="text-muted-foreground">OR</span>
-                <span className="text-muted-foreground">ECL Query</span>
+                <span className="text-muted-foreground text-xs">RF2 File OR ECL</span>
                 <ArrowRight className="h-4 w-4 text-muted-foreground" />
                 <Badge variant="outline" className="shrink-0">Expanded Concepts</Badge>
               </div>
