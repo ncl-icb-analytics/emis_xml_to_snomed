@@ -6,7 +6,7 @@ import { Upload, FileText, Loader2, X } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { parseEmisXml } from '@/lib/xml-parser';
 import { Button } from '@/components/ui/button';
-import { hasParsedXmlData, clearParsedXmlData, saveParsedXmlData } from '@/lib/storage';
+import { hasParsedXmlData, clearParsedXmlData, saveParsedXmlData, loadParsedXmlData } from '@/lib/storage';
 
 export default function XmlUploader() {
   const [isProcessing, setIsProcessing] = useState(false);
@@ -14,10 +14,18 @@ export default function XmlUploader() {
   const [hasStoredData, setHasStoredData] = useState(false);
   const { toast } = useToast();
 
-  // Check for stored data on mount
+  // Check for stored data on mount and load filename
   useEffect(() => {
     hasParsedXmlData().then((hasData) => {
       setHasStoredData(hasData);
+      if (hasData) {
+        // Load the stored data to get the filename
+        loadParsedXmlData().then((data) => {
+          if (data && data.fileName) {
+            setFileName(data.fileName);
+          }
+        });
+      }
     });
   }, []);
 
@@ -56,6 +64,7 @@ export default function XmlUploader() {
         // Save to IndexedDB before dispatching event
         // This ensures data is available when components try to load it on mode switch
         const minimalData = {
+          fileName: file.name,
           namespace: parsedData.namespace,
           parsedAt: parsedData.parsedAt,
           reports: parsedData.reports.map((report) => ({
