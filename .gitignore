@@ -2,6 +2,7 @@
 /node_modules
 /.pnp
 .pnp.js
+bun.lock
 
 # testing
 /coverage
@@ -16,6 +17,7 @@
 # misc
 .DS_Store
 *.pem
+.claude
 
 # debug
 npm-debug.log*
