@@ -24,6 +24,10 @@ export function AppModeProvider({ children }: { children: React.ReactNode }) {
   const [isExtracting, setIsExtracting] = useState(false);
 
   const toggleReportSelection = useCallback((reportId: string) => {
+    // Prevent selection changes during extraction
+    if (isExtracting) {
+      return;
+    }
     setSelectedReportIds((prev) => {
       const newSet = new Set(prev);
       if (newSet.has(reportId)) {
@@ -33,15 +37,23 @@ export function AppModeProvider({ children }: { children: React.ReactNode }) {
       }
       return newSet;
     });
-  }, []);
+  }, [isExtracting]);
 
   const selectAllReports = useCallback((reportIds: string[]) => {
+    // Prevent selection changes during extraction
+    if (isExtracting) {
+      return;
+    }
     setSelectedReportIds(new Set(reportIds));
-  }, []);
+  }, [isExtracting]);
 
   const deselectAllReports = useCallback(() => {
+    // Prevent selection changes during extraction
+    if (isExtracting) {
+      return;
+    }
     setSelectedReportIds(new Set());
-  }, []);
+  }, [isExtracting]);
 
   const isReportSelected = useCallback((reportId: string) => {
     return selectedReportIds.has(reportId);

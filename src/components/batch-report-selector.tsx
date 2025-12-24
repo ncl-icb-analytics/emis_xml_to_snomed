@@ -11,9 +11,11 @@ import { Search, CheckSquare, Square, ChevronDown, ChevronRight, Folder } from '
 import { Separator } from '@/components/ui/separator';
 import { loadParsedXmlData } from '@/lib/storage';
 import { buildFolderTree, getAllReportsInFolder, FolderNode } from '@/lib/folder-tree-utils';
+import { useToast } from '@/hooks/use-toast';
 
 export default function BatchReportSelector() {
-  const { selectedReportIds, toggleReportSelection, selectAllReports, deselectAllReports, isReportSelected } = useAppMode();
+  const { selectedReportIds, toggleReportSelection, selectAllReports, deselectAllReports, isReportSelected, isExtracting } = useAppMode();
+  const { toast } = useToast();
   const [reports, setReports] = useState<EmisReport[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
@@ -79,7 +81,19 @@ export default function BatchReportSelector() {
   const allReportIds = useMemo(() => reports.map((r) => r.id), [reports]);
   const allFilteredSelected = filteredReports.length > 0 && filteredReports.every((r) => isReportSelected(r.id));
 
+  const showExtractionInProgressToast = () => {
+    toast({
+      title: 'Extraction in progress',
+      description: 'Cannot change report selection while extracting. Please wait for extraction to complete.',
+      variant: 'destructive',
+    });
+  };
+
   const handleSelectAll = () => {
+    if (isExtracting) {
+      showExtractionInProgressToast();
+      return;
+    }
     if (allFilteredSelected) {
       // Deselect all filtered reports
       const filteredIds = new Set(filteredReports.map((r) => r.id));
@@ -117,6 +131,10 @@ export default function BatchReportSelector() {
   };
 
   const toggleFolderSelection = (node: FolderNode) => {
+    if (isExtracting) {
+      showExtractionInProgressToast();
+      return;
+    }
     const allReports = getAllReportsInFolder(node);
     const allSelected = allReports.every((r) => isReportSelected(r.id));
 
@@ -212,7 +230,7 @@ export default function BatchReportSelector() {
       <div key={node.path} className="space-y-1">
         {/* Folder header */}
         <div
-          className="flex items-center gap-2 p-1.5 rounded-md hover:bg-accent/50"
+          className={`flex items-center gap-2 p-1.5 rounded-md ${isExtracting ? 'cursor-not-allowed opacity-50' : 'hover:bg-accent/50'}`}
           style={{ paddingLeft: `${level * 12 + 6}px` }}
         >
           <Checkbox
@@ -220,6 +238,7 @@ export default function BatchReportSelector() {
             onCheckedChange={() => toggleFolderSelection(node)}
             onClick={(e) => e.stopPropagation()}
             className="flex-shrink-0"
+            disabled={isExtracting}
           />
           <div
             className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer"
@@ -258,15 +277,22 @@ export default function BatchReportSelector() {
           .map((report) => (
           <div
             key={report.id}
-            className="flex items-start gap-2 p-1.5 rounded-md hover:bg-accent/50 cursor-pointer transition-colors"
+            className={`flex items-start gap-2 p-1.5 rounded-md transition-colors ${isExtracting ? 'cursor-not-allowed opacity-50' : 'hover:bg-accent/50 cursor-pointer'}`}
             style={{ paddingLeft: `${(level + 1) * 12 + 6}px` }}
-            onClick={() => toggleReportSelection(report.id)}
+            onClick={() => {
+              if (isExtracting) {
+                showExtractionInProgressToast();
+              } else {
+                toggleReportSelection(report.id);
+              }
+            }}
           >
             <Checkbox
               checked={isReportSelected(report.id)}
               onCheckedChange={() => toggleReportSelection(report.id)}
               onClick={(e) => e.stopPropagation()}
               className="mt-0.5 flex-shrink-0"
+              disabled={isExtracting}
             />
             <div className="flex-1 min-w-0">
               <div className="font-medium text-xs truncate">{report.searchName}</div>
@@ -313,6 +339,7 @@ export default function BatchReportSelector() {
           size="sm"
           onClick={handleSelectAll}
           className="h-7 text-xs gap-1.5"
+          disabled={isExtracting}
         >
           {allFilteredSelected ? (
             <>
@@ -335,12 +362,19 @@ export default function BatchReportSelector() {
           {filteredReports.map((report) => (
             <div
               key={report.id}
-              className="flex items-start gap-2 p-2 rounded-md hover:bg-accent/50 cursor-pointer transition-colors"
-              onClick={() => toggleReportSelection(report.id)}
+              className={`flex items-start gap-2 p-2 rounded-md transition-colors ${isExtracting ? 'cursor-not-allowed opacity-50' : 'hover:bg-accent/50 cursor-pointer'}`}
+              onClick={() => {
+                if (isExtracting) {
+                  showExtractionInProgressToast();
+                } else {
+                  toggleReportSelection(report.id);
+                }
+              }}
             >
               <Checkbox
                 checked={isReportSelected(report.id)}
                 onCheckedChange={() => toggleReportSelection(report.id)}
+                disabled={isExtracting}
                 className="mt-0.5"
               />
               <div className="flex-1 min-w-0">
