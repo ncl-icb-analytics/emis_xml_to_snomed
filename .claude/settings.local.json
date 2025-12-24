@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(git add:*)",
-      "Bash(git commit -m \"$(cat <<''EOF''\nfeat: add password authentication\n\nAdd basic password protection to control API access. Single password authentication with no username required.\n\nChanges:\n- Add Next.js middleware for authentication routing\n- Create /login page with password input form\n- Add /api/auth/login endpoint for password verification\n- Set HTTP-only cookie for 7-day session\n- Add APP_PASSWORD environment variable\n- Default password: EmisToSnomed2024!\n\nNo sensitive data is protected by this authentication layer.\nEOF\n)\")",
-      "Bash(git push:*)"
-    ]
-  }
-}
