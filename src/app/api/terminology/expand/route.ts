@@ -4,6 +4,7 @@ import {
   ExpandCodesResponse,
   ExpandedCodeSet,
   ValueSetGroup,
+  EmisValue,
 } from '@/lib/types';
 import { buildBatchedEclQuery, buildBatchedEclQueryWithoutRefsets, buildUkProductEcl, separateRefsets } from '@/lib/ecl-builder';
 import {
@@ -14,6 +15,299 @@ import {
 import { formatForSql } from '@/lib/sql-formatter';
 import { generateValueSetHash, generateValueSetFriendlyName, generateValueSetId } from '@/lib/valueset-utils';
 import { expandRefsetsFromRf2, refsetExistsInRf2, getRefsetDisplayName } from '@/lib/rf2-refset-parser';
+
+// Internal type for values with additional metadata during expansion
+interface ValueWithMetadata extends EmisValue {
+  originalCode: string;
+  translatedSnomedCode?: string;
+  codeSystem: string;
+}
+
+/**
+ * Expands a single ValueSet by processing its codes through translation,
+ * historical resolution, and expansion via RF2/terminology server.
+ *
+ * This handles the complex multi-step process:
+ * 1. Build values array with translated/resolved codes
+ * 2. Handle SCT_CONST (UK Product expansion)
+ * 3. Separate and expand refsets from RF2 files
+ * 4. Expand remaining codes via ECL queries
+ * 5. Track failed codes and generate metadata
+ */
+async function expandSingleValueSet(
+  mapping: any,
+  parentCodes: string[],
+  displayNames: string[] | undefined,
+  includeChildren: boolean[],
+  isRefset: boolean[] | undefined,
+  codeSystems: string[] | undefined,
+  codeToSnomedMap: Map<string, any>,
+  historicalMap: Map<string, string>,
+  featureId: string,
+  featureName: string,
+  allConceptsMap: Map<string, any>
+): Promise<ValueSetGroup> {
+  const vsOriginalParentCodes = mapping.codeIndices.map((idx: number) => parentCodes[idx]);
+  const vsExcludedCodes = mapping.excludedCodes || [];
+  const vsExcludedSet = new Set(vsExcludedCodes);
+
+  // Build values array for this specific ValueSet
+  const vsValues: ValueWithMetadata[] = mapping.codeIndices.map((idx: number) => {
+    const originalCode = parentCodes[idx];
+    const translatedCode = codeToSnomedMap.get(originalCode);
+    const snomedCode = translatedCode?.code || originalCode;
+    const currentCode = historicalMap.get(snomedCode) || snomedCode;
+
+    return {
+      code: currentCode,
+      originalCode,
+      translatedSnomedCode: translatedCode?.code, // Store the ConceptMap translated code for SCT_CONST
+      displayName: displayNames?.[idx] || '',
+      includeChildren: includeChildren[idx] || false,
+      isRefset: isRefset?.[idx] || false,
+      codeSystem: codeSystems?.[idx] || 'EMISINTERNAL',
+    };
+  });
+
+  // Handle SCT_CONST codes - expand UK Products for substance codes
+  const sctConstCodes = vsValues.filter((v: ValueWithMetadata) => v.codeSystem === 'SCT_CONST');
+  let ukProductConcepts: any[] = [];
+  // Track which SCT_CONST codes successfully expanded to products (to exclude from failed codes)
+  const successfullyExpandedSctConstCodes = new Set<string>();
+
+  if (sctConstCodes.length > 0) {
+    console.log(`Found ${sctConstCodes.length} SCT_CONST codes, expanding UK Products...`);
+
+    for (const sctConstValue of sctConstCodes) {
+      // Use the translated SNOMED code from ConceptMap, not the original XML code
+      // If no translation exists, fall back to the resolved code
+      const substanceCode = sctConstValue.translatedSnomedCode || sctConstValue.code;
+
+      if (!sctConstValue.translatedSnomedCode) {
+        console.warn(`  SCT_CONST code ${sctConstValue.originalCode} has no ConceptMap translation, using resolved code ${substanceCode}`);
+      }
+
+      try {
+        // Build UK Product ECL query using the translated substance code
+        const ukProductEcl = buildUkProductEcl(substanceCode);
+        console.log(`  Expanding UK Products for substance ${substanceCode} (original: ${sctConstValue.originalCode}): ${ukProductEcl}`);
+
+        // Expand the ECL query
+        const products = await expandEclQuery(ukProductEcl);
+        console.log(`  -> Found ${products.length} UK Products for substance ${substanceCode}`);
+
+        // If we got products, mark this SCT_CONST code as successfully expanded
+        if (products.length > 0) {
+          successfullyExpandedSctConstCodes.add(sctConstValue.originalCode);
+        }
+
+        // Mark all products as from terminology server
+        products.forEach((product: any) => {
+          product.source = 'terminology_server';
+          product.excludeChildren = !sctConstValue.includeChildren;
+        });
+
+        ukProductConcepts.push(...products);
+      } catch (error) {
+        console.error(`Error expanding UK Products for substance ${substanceCode}:`, error);
+        // Continue with other substances
+      }
+    }
+  }
+
+  // Filter out SCT_CONST codes from normal expansion (they're handled separately)
+  const nonSctConstValues = vsValues.filter((v: ValueWithMetadata) => v.codeSystem !== 'SCT_CONST');
+
+  // Separate refsets from non-refsets
+  const { refsets: refsetValues, nonRefsets: nonRefsetValues } = separateRefsets(nonSctConstValues);
+
+  // Also check codes that failed ConceptMap translation - they might be refsets in RF2
+  // Check both the original code and the resolved code (after historical resolution)
+  const codesThatFailedConceptMap = nonSctConstValues.filter((v: ValueWithMetadata) => {
+    const translatedCode = codeToSnomedMap.get(v.originalCode);
+    return !translatedCode && !v.isRefset; // Failed translation and not already marked as refset
+  });
+
+  // Check if any of these failed codes (or their resolved codes) are refsets in RF2
+  const potentialRefsetsFromRf2: ValueWithMetadata[] = [];
+  for (const value of codesThatFailedConceptMap) {
+    // Check both the original code and the resolved code
+    const codesToCheck = [value.code, value.originalCode].filter(Boolean);
+    for (const codeToCheck of codesToCheck) {
+      if (refsetExistsInRf2(codeToCheck)) {
+        console.log(`  Code ${value.originalCode} (resolved: ${value.code}) not translated by ConceptMap but found as refset ${codeToCheck} in RF2`);
+        potentialRefsetsFromRf2.push({ ...value, code: codeToCheck, isRefset: true });
+        break; // Found it, no need to check other codes
+      }
+    }
+  }
+
+  // Combine detected refsets with potential refsets from RF2
+  const allRefsetValues = [...refsetValues, ...potentialRefsetsFromRf2];
+  // Filter out potential refsets from non-refsets by comparing codes (since nonRefsetValues are EmisValue type)
+  const allNonRefsetValues = nonRefsetValues.filter((v: EmisValue) =>
+    !potentialRefsetsFromRf2.some((pr: ValueWithMetadata) => pr.code === v.code || pr.originalCode === v.code)
+  );
+
+  console.log(`Expanding ValueSet ${mapping.valueSetIndex + 1} with ${nonSctConstValues.length} codes (${allRefsetValues.length} refsets including ${potentialRefsetsFromRf2.length} found in RF2, ${allNonRefsetValues.length} non-refsets, ${sctConstCodes.length} SCT_CONST handled separately)...`);
+
+  let vsConcepts: any[] = [];
+
+  // First, try expanding refsets from RF2 files
+  const refsetIds = allRefsetValues.map(v => v.code);
+  const rf2RefsetResults = await expandRefsetsFromRf2(refsetIds);
+  const rf2RefsetIds = Array.from(rf2RefsetResults.keys());
+  const refsetsNotFoundInRf2 = refsetIds.filter(id => !rf2RefsetIds.includes(id));
+
+  // Add RF2 refset results
+  for (const [refsetId, concepts] of rf2RefsetResults) {
+    vsConcepts.push(...concepts);
+    console.log(`  -> Expanded refset ${refsetId} from RF2: ${concepts.length} members`);
+  }
+
+  // For refsets not found in RF2, fall back to ECL queries
+  const refsetsToQueryViaEcl = allRefsetValues.filter(v => refsetsNotFoundInRf2.includes(v.code));
+
+  // Build ECL query for non-refsets and refsets not found in RF2
+  const valuesForEcl = [...allNonRefsetValues, ...refsetsToQueryViaEcl];
+  const eclExpression = valuesForEcl.length > 0
+    ? buildBatchedEclQuery(valuesForEcl, vsExcludedCodes)
+    : '';
+
+  // Expand via terminology server if needed
+  if (eclExpression) {
+    try {
+      const eclConcepts = await expandEclQuery(eclExpression);
+      console.log(`  -> Got ${eclConcepts.length} concepts from terminology server for ValueSet ${mapping.valueSetIndex + 1}`);
+      vsConcepts.push(...eclConcepts);
+    } catch (error) {
+      console.error(`Error expanding ValueSet ${mapping.valueSetIndex + 1} via ECL:`, error);
+      // Continue with concepts we already have from RF2
+    }
+  }
+
+  // Combine normal concepts with UK Product concepts
+  vsConcepts = [...vsConcepts, ...ukProductConcepts];
+
+  // Mark parent codes in this ValueSet (preserve source from RF2 or terminology server)
+  const vsParentConceptIdSet = new Set(vsValues.map((v: ValueWithMetadata) => v.code));
+  vsConcepts.forEach((concept) => {
+    // Don't overwrite source - RF2 concepts already have 'rf2_file', ECL concepts have 'terminology_server'
+    if (vsParentConceptIdSet.has(concept.code)) {
+      const valueIndex = vsValues.findIndex((v: ValueWithMetadata) => v.code === concept.code);
+      if (valueIndex !== -1) {
+        concept.isRefset = vsValues[valueIndex].isRefset;
+        concept.excludeChildren = !vsValues[valueIndex].includeChildren;
+      }
+    }
+    // Add to global concepts map
+    if (!allConceptsMap.has(concept.code)) {
+      allConceptsMap.set(concept.code, { ...concept });
+    }
+  });
+
+  // Filter out excluded codes
+  const filteredConcepts = vsConcepts.filter(
+    (c) => !vsExcludedSet.has(c.code)
+  );
+
+  // Check if expansion failed for refsets
+  const vsIsRefsetFlags = mapping.codeIndices.map((idx: number) => isRefset?.[idx] || false);
+  const allRefsets = vsIsRefsetFlags.length > 0 && vsIsRefsetFlags.every((flag: boolean) => flag === true);
+  // Check if we only got back the original codes (no expansion happened)
+  const originalCodeSet = new Set(vsValues.map((v: ValueWithMetadata) => v.code));
+  const hasOnlyOriginalCodes = filteredConcepts.length > 0 && filteredConcepts.every((c: any) => originalCodeSet.has(c.code));
+  const expansionError = allRefsets && hasOnlyOriginalCodes
+    ? 'Reference set not found. This reference set is not available in the terminology server.'
+    : undefined;
+
+  const vsSqlFormatted = formatForSql(filteredConcepts.map((c) => c.code));
+
+  // Build original codes metadata and track failed codes
+  const originalCodesMetadata = mapping.codeIndices.map((idx: number) => {
+    const originalCode = parentCodes[idx];
+    const translatedCode = codeToSnomedMap.get(originalCode);
+    const snomedCode = translatedCode?.code || originalCode;
+    const currentCode = historicalMap.get(snomedCode) || snomedCode;
+
+    return {
+      originalCode,
+      displayName: displayNames?.[idx] || '',
+      codeSystem: codeSystems?.[idx] || 'EMISINTERNAL',
+      includeChildren: includeChildren[idx] || false,
+      isRefset: isRefset?.[idx] || false,
+      translatedTo: translatedCode ? currentCode : undefined,
+      translatedToDisplay: translatedCode?.display,
+    };
+  });
+
+  // Track refsets that were successfully expanded from RF2
+  const successfullyExpandedRefsets = new Set(rf2RefsetIds);
+
+  // Get refset metadata (code and name) for successfully expanded refsets
+  const refsetsMetadata = rf2RefsetIds.map(refsetId => ({
+    refsetId,
+    refsetName: getRefsetDisplayName(refsetId) || `Refset ${refsetId}`,
+  }));
+
+  // Track failed codes - codes that don't appear in expanded concepts
+  // Exclude SCT_CONST codes that successfully expanded to UK Products
+  // Exclude refsets that successfully expanded from RF2 (refset ID itself isn't a concept)
+  const expandedCodeSet = new Set(filteredConcepts.map((c: any) => c.code));
+  const failedCodes = originalCodesMetadata
+    .filter((oc: any) => {
+      // Skip SCT_CONST codes that successfully expanded to UK Products
+      // (The substance codes themselves won't appear in expanded concepts, only the products will)
+      if (oc.codeSystem === 'SCT_CONST' && successfullyExpandedSctConstCodes.has(oc.originalCode)) {
+        return false;
+      }
+
+      // Skip refsets that successfully expanded from RF2
+      // (The refset ID itself isn't a concept, so it won't appear in expanded concepts)
+      if (oc.isRefset && successfullyExpandedRefsets.has(oc.translatedTo || oc.originalCode)) {
+        return false;
+      }
+
+      // Code failed if it doesn't appear in expanded concepts
+      // Check both the translated code (if available) and the original code
+      const translatedCode = oc.translatedTo || oc.originalCode;
+      const codeFound = expandedCodeSet.has(translatedCode) || expandedCodeSet.has(oc.originalCode);
+
+      return !codeFound;
+    })
+    .map((oc: any) => ({
+      originalCode: oc.originalCode,
+      displayName: oc.displayName,
+      codeSystem: oc.codeSystem,
+      reason: oc.translatedTo
+        ? 'Not found in terminology server expansion'
+        : 'No translation found from ConceptMap',
+    }));
+
+  const vsSnomedParentCodes = vsValues.map((v: ValueWithMetadata) => v.code);
+
+  // Generate hash from original XML codes (before translation) for duplicate detection
+  const xmlCodes = vsOriginalParentCodes.sort();
+  const valueSetHash = generateValueSetHash(xmlCodes);
+  const valueSetFriendlyName = generateValueSetFriendlyName(featureName, mapping.valueSetIndex);
+  // Generate deterministic ID based on report ID, valueset index, and valueset hash
+  const valueSetId = generateValueSetId(featureId, valueSetHash, mapping.valueSetIndex);
+
+  return {
+    valueSetId,
+    valueSetIndex: mapping.valueSetIndex,
+    valueSetHash,
+    valueSetFriendlyName,
+    valueSetUniqueName: valueSetId, // Use UUID as unique name too
+    concepts: filteredConcepts,
+    sqlFormattedCodes: vsSqlFormatted,
+    parentCodes: vsSnomedParentCodes,
+    expansionError,
+    failedCodes: failedCodes.length > 0 ? failedCodes : undefined,
+    refsets: refsetsMetadata.length > 0 ? refsetsMetadata : undefined,
+    originalCodes: originalCodesMetadata,
+  };
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -122,266 +416,21 @@ export async function POST(request: NextRequest) {
     if (valueSetMapping && valueSetMapping.length > 0) {
       // Expand each ValueSet separately
       for (const mapping of valueSetMapping) {
-        const vsOriginalParentCodes = mapping.codeIndices.map((idx) => parentCodes[idx]);
-        const vsExcludedCodes = mapping.excludedCodes || [];
-        const vsExcludedSet = new Set(vsExcludedCodes);
-
-        // Build values array for this specific ValueSet
-        const vsValues = mapping.codeIndices.map((idx) => {
-          const originalCode = parentCodes[idx];
-          const translatedCode = codeToSnomedMap.get(originalCode);
-          const snomedCode = translatedCode?.code || originalCode;
-          const currentCode = historicalMap.get(snomedCode) || snomedCode;
-
-          return {
-            code: currentCode,
-            originalCode,
-            translatedSnomedCode: translatedCode?.code, // Store the ConceptMap translated code for SCT_CONST
-            displayName: displayNames?.[idx] || '',
-            includeChildren: includeChildren[idx] || false,
-            isRefset: isRefset?.[idx] || false,
-            codeSystem: codeSystems?.[idx] || 'EMISINTERNAL',
-          };
-        });
-
-        // Handle SCT_CONST codes - expand UK Products for substance codes
-        const sctConstCodes = vsValues.filter(v => v.codeSystem === 'SCT_CONST');
-        let ukProductConcepts: any[] = [];
-        // Track which SCT_CONST codes successfully expanded to products (to exclude from failed codes)
-        const successfullyExpandedSctConstCodes = new Set<string>();
-        
-        if (sctConstCodes.length > 0) {
-          console.log(`Found ${sctConstCodes.length} SCT_CONST codes, expanding UK Products...`);
-          
-          for (const sctConstValue of sctConstCodes) {
-            // Use the translated SNOMED code from ConceptMap, not the original XML code
-            // If no translation exists, fall back to the resolved code
-            const substanceCode = sctConstValue.translatedSnomedCode || sctConstValue.code;
-            
-            if (!sctConstValue.translatedSnomedCode) {
-              console.warn(`  SCT_CONST code ${sctConstValue.originalCode} has no ConceptMap translation, using resolved code ${substanceCode}`);
-            }
-            
-            try {
-              // Build UK Product ECL query using the translated substance code
-              const ukProductEcl = buildUkProductEcl(substanceCode);
-              console.log(`  Expanding UK Products for substance ${substanceCode} (original: ${sctConstValue.originalCode}): ${ukProductEcl}`);
-              
-              // Expand the ECL query
-              const products = await expandEclQuery(ukProductEcl);
-              console.log(`  -> Found ${products.length} UK Products for substance ${substanceCode}`);
-              
-              // If we got products, mark this SCT_CONST code as successfully expanded
-              if (products.length > 0) {
-                successfullyExpandedSctConstCodes.add(sctConstValue.originalCode);
-              }
-              
-              // Mark all products as from terminology server
-              products.forEach((product: any) => {
-                product.source = 'terminology_server';
-                product.excludeChildren = !sctConstValue.includeChildren;
-              });
-              
-              ukProductConcepts.push(...products);
-            } catch (error) {
-              console.error(`Error expanding UK Products for substance ${substanceCode}:`, error);
-              // Continue with other substances
-            }
-          }
-        }
-
-        // Filter out SCT_CONST codes from normal expansion (they're handled separately)
-        const nonSctConstValues = vsValues.filter(v => v.codeSystem !== 'SCT_CONST');
-        
-        // Separate refsets from non-refsets
-        const { refsets: refsetValues, nonRefsets: nonRefsetValues } = separateRefsets(nonSctConstValues);
-        
-        // Also check codes that failed ConceptMap translation - they might be refsets in RF2
-        // Check both the original code and the resolved code (after historical resolution)
-        const codesThatFailedConceptMap = nonSctConstValues.filter(v => {
-          const translatedCode = codeToSnomedMap.get(v.originalCode);
-          return !translatedCode && !v.isRefset; // Failed translation and not already marked as refset
-        });
-        
-        // Check if any of these failed codes (or their resolved codes) are refsets in RF2
-        const potentialRefsetsFromRf2: typeof nonSctConstValues = [];
-        for (const value of codesThatFailedConceptMap) {
-          // Check both the original code and the resolved code
-          const codesToCheck = [value.code, value.originalCode].filter(Boolean);
-          for (const codeToCheck of codesToCheck) {
-            if (refsetExistsInRf2(codeToCheck)) {
-              console.log(`  Code ${value.originalCode} (resolved: ${value.code}) not translated by ConceptMap but found as refset ${codeToCheck} in RF2`);
-              potentialRefsetsFromRf2.push({ ...value, code: codeToCheck, isRefset: true });
-              break; // Found it, no need to check other codes
-            }
-          }
-        }
-        
-        // Combine detected refsets with potential refsets from RF2
-        const allRefsetValues = [...refsetValues, ...potentialRefsetsFromRf2];
-        // Filter out potential refsets from non-refsets by comparing codes (since nonRefsetValues are EmisValue type)
-        const allNonRefsetValues = nonRefsetValues.filter(v => 
-          !potentialRefsetsFromRf2.some(pr => pr.code === v.code || pr.originalCode === v.code)
-        );
-        
-        console.log(`Expanding ValueSet ${mapping.valueSetIndex + 1} with ${nonSctConstValues.length} codes (${allRefsetValues.length} refsets including ${potentialRefsetsFromRf2.length} found in RF2, ${allNonRefsetValues.length} non-refsets, ${sctConstCodes.length} SCT_CONST handled separately)...`);
-
-        let vsConcepts: any[] = [];
-        
-        // First, try expanding refsets from RF2 files
-        const refsetIds = allRefsetValues.map(v => v.code);
-        const rf2RefsetResults = await expandRefsetsFromRf2(refsetIds);
-        const rf2RefsetIds = Array.from(rf2RefsetResults.keys());
-        const refsetsNotFoundInRf2 = refsetIds.filter(id => !rf2RefsetIds.includes(id));
-        
-        // Add RF2 refset results
-        for (const [refsetId, concepts] of rf2RefsetResults) {
-          vsConcepts.push(...concepts);
-          console.log(`  -> Expanded refset ${refsetId} from RF2: ${concepts.length} members`);
-        }
-        
-        // For refsets not found in RF2, fall back to ECL queries
-        const refsetsToQueryViaEcl = allRefsetValues.filter(v => refsetsNotFoundInRf2.includes(v.code));
-        
-        // Build ECL query for non-refsets and refsets not found in RF2
-        const valuesForEcl = [...allNonRefsetValues, ...refsetsToQueryViaEcl];
-        const eclExpression = valuesForEcl.length > 0 
-          ? buildBatchedEclQuery(valuesForEcl, vsExcludedCodes)
-          : '';
-
-        // Expand via terminology server if needed
-        if (eclExpression) {
-          try {
-            const eclConcepts = await expandEclQuery(eclExpression);
-            console.log(`  -> Got ${eclConcepts.length} concepts from terminology server for ValueSet ${mapping.valueSetIndex + 1}`);
-            vsConcepts.push(...eclConcepts);
-          } catch (error) {
-            console.error(`Error expanding ValueSet ${mapping.valueSetIndex + 1} via ECL:`, error);
-            // Continue with concepts we already have from RF2
-          }
-        }
-        
-        // Combine normal concepts with UK Product concepts
-        vsConcepts = [...vsConcepts, ...ukProductConcepts];
-
-        // Mark parent codes in this ValueSet (preserve source from RF2 or terminology server)
-        const vsParentConceptIdSet = new Set(vsValues.map(v => v.code));
-        vsConcepts.forEach((concept) => {
-          // Don't overwrite source - RF2 concepts already have 'rf2_file', ECL concepts have 'terminology_server'
-          if (vsParentConceptIdSet.has(concept.code)) {
-            const valueIndex = vsValues.findIndex(v => v.code === concept.code);
-            if (valueIndex !== -1) {
-              concept.isRefset = vsValues[valueIndex].isRefset;
-              concept.excludeChildren = !vsValues[valueIndex].includeChildren;
-            }
-          }
-          // Add to global concepts map
-          if (!allConceptsMap.has(concept.code)) {
-            allConceptsMap.set(concept.code, { ...concept });
-          }
-        });
-
-        // Filter out excluded codes
-        const filteredConcepts = vsConcepts.filter(
-          (c) => !vsExcludedSet.has(c.code)
+        const valueSetGroup = await expandSingleValueSet(
+          mapping,
+          parentCodes,
+          displayNames,
+          includeChildren,
+          isRefset,
+          codeSystems,
+          codeToSnomedMap,
+          historicalMap,
+          featureId,
+          featureName,
+          allConceptsMap
         );
 
-        // Check if expansion failed for refsets
-        const vsIsRefsetFlags = mapping.codeIndices.map((idx) => isRefset?.[idx] || false);
-        const allRefsets = vsIsRefsetFlags.length > 0 && vsIsRefsetFlags.every(flag => flag === true);
-        // Check if we only got back the original codes (no expansion happened)
-        const originalCodeSet = new Set(vsValues.map(v => v.code));
-        const hasOnlyOriginalCodes = filteredConcepts.length > 0 && filteredConcepts.every(c => originalCodeSet.has(c.code));
-        const expansionError = allRefsets && hasOnlyOriginalCodes
-          ? 'Reference set not found. This reference set is not available in the terminology server.'
-          : undefined;
-
-        const vsSqlFormatted = formatForSql(filteredConcepts.map((c) => c.code));
-
-        // Build original codes metadata and track failed codes
-        const originalCodesMetadata = mapping.codeIndices.map((idx) => {
-          const originalCode = parentCodes[idx];
-          const translatedCode = codeToSnomedMap.get(originalCode);
-          const snomedCode = translatedCode?.code || originalCode;
-          const currentCode = historicalMap.get(snomedCode) || snomedCode;
-
-          return {
-            originalCode,
-            displayName: displayNames?.[idx] || '',
-            codeSystem: codeSystems?.[idx] || 'EMISINTERNAL',
-            includeChildren: includeChildren[idx] || false,
-            isRefset: isRefset?.[idx] || false,
-            translatedTo: translatedCode ? currentCode : undefined,
-            translatedToDisplay: translatedCode?.display,
-          };
-        });
-
-        // Track refsets that were successfully expanded from RF2
-        const successfullyExpandedRefsets = new Set(rf2RefsetIds);
-        
-        // Get refset metadata (code and name) for successfully expanded refsets
-        const refsetsMetadata = rf2RefsetIds.map(refsetId => ({
-          refsetId,
-          refsetName: getRefsetDisplayName(refsetId) || `Refset ${refsetId}`,
-        }));
-
-        // Track failed codes - codes that don't appear in expanded concepts
-        // Exclude SCT_CONST codes that successfully expanded to UK Products
-        // Exclude refsets that successfully expanded from RF2 (refset ID itself isn't a concept)
-        const expandedCodeSet = new Set(filteredConcepts.map(c => c.code));
-        const failedCodes = originalCodesMetadata
-          .filter(oc => {
-            // Skip SCT_CONST codes that successfully expanded to UK Products
-            // (The substance codes themselves won't appear in expanded concepts, only the products will)
-            if (oc.codeSystem === 'SCT_CONST' && successfullyExpandedSctConstCodes.has(oc.originalCode)) {
-              return false;
-            }
-            
-            // Skip refsets that successfully expanded from RF2
-            // (The refset ID itself isn't a concept, so it won't appear in expanded concepts)
-            if (oc.isRefset && successfullyExpandedRefsets.has(oc.translatedTo || oc.originalCode)) {
-              return false;
-            }
-            
-            // Code failed if it doesn't appear in expanded concepts
-            // Check both the translated code (if available) and the original code
-            const translatedCode = oc.translatedTo || oc.originalCode;
-            const codeFound = expandedCodeSet.has(translatedCode) || expandedCodeSet.has(oc.originalCode);
-            
-            return !codeFound;
-          })
-          .map(oc => ({
-            originalCode: oc.originalCode,
-            displayName: oc.displayName,
-            codeSystem: oc.codeSystem,
-            reason: oc.translatedTo 
-              ? 'Not found in terminology server expansion'
-              : 'No translation found from ConceptMap',
-          }));
-
-        const vsSnomedParentCodes = vsValues.map(v => v.code);
-
-        // Generate hash from original XML codes (before translation) for duplicate detection
-        const xmlCodes = vsOriginalParentCodes.sort();
-        const valueSetHash = generateValueSetHash(xmlCodes);
-        const valueSetFriendlyName = generateValueSetFriendlyName(featureName, mapping.valueSetIndex);
-        // Generate deterministic ID based on report ID, valueset index, and valueset hash
-        const valueSetId = generateValueSetId(featureId, valueSetHash, mapping.valueSetIndex);
-
-        valueSetGroups.push({
-          valueSetId,
-          valueSetIndex: mapping.valueSetIndex,
-          valueSetHash,
-          valueSetFriendlyName,
-          valueSetUniqueName: valueSetId, // Use UUID as unique name too
-          concepts: filteredConcepts,
-          sqlFormattedCodes: vsSqlFormatted,
-          parentCodes: vsSnomedParentCodes,
-          expansionError,
-          failedCodes: failedCodes.length > 0 ? failedCodes : undefined,
-          refsets: refsetsMetadata.length > 0 ? refsetsMetadata : undefined,
-          originalCodes: originalCodesMetadata,
-        });
+        valueSetGroups.push(valueSetGroup);
 
         // Small delay between ValueSet expansions to avoid rate limiting
         if (mapping !== valueSetMapping[valueSetMapping.length - 1]) {
