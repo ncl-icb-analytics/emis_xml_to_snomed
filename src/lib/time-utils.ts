@@ -13,3 +13,25 @@ export function formatTime(seconds: number): string {
   }
   return `${minutes}:${secs.toString().padStart(2, '0')}`;
 }
+
+/**
+ * Formats seconds into a natural language time string
+ * @param seconds - Number of seconds to format
+ * @returns Natural language time string (e.g., "2 minutes 32 seconds", "1 minute", "45 seconds")
+ */
+export function formatTimeNatural(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+
+  const parts: string[] = [];
+
+  if (minutes > 0) {
+    parts.push(`${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`);
+  }
+
+  if (secs > 0) {
+    parts.push(`${secs} ${secs === 1 ? 'second' : 'seconds'}`);
+  }
+
+  return parts.length > 0 ? parts.join(' ') : '0 seconds';
+}

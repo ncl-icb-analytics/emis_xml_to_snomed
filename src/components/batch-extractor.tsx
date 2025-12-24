@@ -12,7 +12,7 @@ import { loadParsedXmlData } from '@/lib/storage';
 import { ExtractionFileList } from '@/components/extraction-file-list';
 import { ExtractionDataModel } from '@/components/extraction-data-model';
 import { expandValueSet } from '@/lib/valueset-expansion';
-import { formatTime } from '@/lib/time-utils';
+import { formatTime, formatTimeNatural } from '@/lib/time-utils';
 import { convertToCSV } from '@/lib/csv-utils';
 import { ExtractionDataViewer } from '@/components/extraction-data-viewer';
 
@@ -599,7 +599,7 @@ export default function BatchExtractor() {
                   <p className="text-sm text-green-700">
                     Successfully processed {selectedReports.length} reports
                     {totalTime !== null && totalTime >= 0 && (
-                      <> in {formatTime(totalTime)}</>
+                      <> in {formatTimeNatural(totalTime)}</>
                     )}
                   </p>
                 </div>
