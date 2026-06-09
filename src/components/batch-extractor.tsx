@@ -664,13 +664,13 @@ export default function BatchExtractor() {
           <Badge variant="secondary">{selectedReports.length}</Badge>
         </div>
 
-        <Card className={status === 'idle' ? 'bg-primary/5 border-primary/20' : 'border bg-muted/30'}>
+        <Card className={status === 'idle' ? 'bg-primary/5 border-primary/20' : 'shadow-sm'}>
           <CardContent className="pt-4">
-            <div className="space-y-2 max-h-60 overflow-y-auto">
+            <div className="grid gap-2 sm:grid-cols-2 max-h-60 overflow-y-auto pr-1">
               {selectedReports.map((report) => (
                 <div
                   key={report.id}
-                  className="flex items-start justify-between gap-3 p-2 rounded-md bg-background hover:bg-muted/50 transition-colors"
+                  className="flex items-start justify-between gap-3 p-2 rounded-md border border-border/60 bg-muted/40 hover:bg-muted/70 transition-colors"
                 >
                   <div className="flex-1 min-w-0">
                     <div className="font-medium text-sm truncate">{report.searchName}</div>
