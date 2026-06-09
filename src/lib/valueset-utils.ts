@@ -104,6 +104,17 @@ export function generateValueSetHash(codes: string[]): string {
   return hash.substring(0, 16);
 }
 
+/** Safe, stable file name from a report search name */
+export function slugifyFileName(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .substring(0, 80)
+    .replace(/-+$/, '');
+  return slug || 'report';
+}
+
 /**
  * Generates a machine/human friendly name for a ValueSet
  * Extracts meaningful content from report names, including parenthetical identifiers

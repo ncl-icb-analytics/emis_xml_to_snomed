@@ -151,6 +151,7 @@ export async function POST(request: NextRequest) {
             parentChain: summary.parentChain,
             valueSets: summary.valueSets,
             implementationGuideMarkdown: summary.implementationGuideMarkdown,
+            implementationGuideNote: 'The markdown is a readable guide. For exact operators, ranges, thresholds, restrictions, and linked-criterion logic, use getReportLogic and inspect agentInterpretation.decisionFlow[].criteriaDetails.',
           },
         });
       }

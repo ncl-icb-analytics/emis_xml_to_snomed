@@ -14,7 +14,8 @@ import { ExtractionFileList } from '@/components/extraction-file-list';
 import { ExtractionDataModel } from '@/components/extraction-data-model';
 import { buildNormalizedTables, ExtractionInstance, NormalizedTables } from '@/lib/batch-assembly';
 import { TranslatedCode, RawValueSetExpansion } from '@/lib/types';
-import { generateValueSetHash } from '@/lib/valueset-utils';
+import { generateValueSetHash, slugifyFileName } from '@/lib/valueset-utils';
+import { buildImplementationGuideMarkdown } from '@/lib/agent-report-utils';
 import { formatTime, formatTimeNatural } from '@/lib/time-utils';
 import { convertToCSV } from '@/lib/csv-utils';
 import { ExtractionDataViewer } from '@/components/extraction-data-viewer';
@@ -596,6 +597,35 @@ export default function BatchExtractor() {
       if (extractedData.exceptions.length > 0) {
         zip.file('exceptions.csv', convertToCSV(extractedData.exceptions));
       }
+
+      // Implementation guides — one per report, mirroring the folder tree.
+      // Content is deterministic (no timestamps), so guides generated from
+      // different XML versions can be diffed directly.
+      const sortedReports = [...selectedReports].sort(
+        (a, b) => a.rule.localeCompare(b.rule) || a.searchName.localeCompare(b.searchName),
+      );
+      const usedPaths = new Set<string>();
+      const indexLines: string[] = ['# Implementation guides', ''];
+      let lastFolder = '';
+      for (const report of sortedReports) {
+        const folderSegments = report.rule.split(' > ').slice(1).map(slugifyFileName);
+        const basePath = ['guides', ...folderSegments, slugifyFileName(report.searchName)].join('/');
+        let filePath = `${basePath}.md`;
+        for (let suffix = 2; usedPaths.has(filePath); suffix++) {
+          filePath = `${basePath}-${suffix}.md`;
+        }
+        usedPaths.add(filePath);
+        zip.file(filePath, buildImplementationGuideMarkdown(report, reports));
+
+        const folderLabel = report.rule.split(' > ').slice(1).join(' > ') || 'Top level';
+        if (folderLabel !== lastFolder) {
+          indexLines.push('', `## ${folderLabel}`, '');
+          lastFolder = folderLabel;
+        }
+        const linkText = report.searchName.replace(/\[/g, '\\[').replace(/\]/g, '\\]');
+        indexLines.push(`- [${linkText}](${filePath.replace(/^guides\//, '')})`);
+      }
+      zip.file('guides/index.md', `${indexLines.join('\n').trim()}\n`);
 
       // Generate ZIP file
       const zipBlob = await zip.generateAsync({ type: 'blob' });

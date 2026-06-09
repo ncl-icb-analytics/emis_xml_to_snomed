@@ -12,6 +12,7 @@ export function ExtractionFileList({ className }: ExtractionFileListProps) {
     { name: 'expanded_concepts.csv', description: 'Expanded SNOMED concepts from terminology server and RF2' },
     { name: 'failed_codes.csv', description: 'Codes that failed to translate or expand with error reasons' },
     { name: 'exceptions.csv', description: 'Excluded codes with translation status and ECL inclusion tracking' },
+    { name: 'guides/', description: 'Implementation guide (.md) per report, diffable across XML versions' },
   ];
 
   return (

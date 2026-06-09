@@ -11,6 +11,8 @@ import { hasParsedXmlData, loadParsedXmlData } from '@/lib/storage';
 import { expandValueSet } from '@/lib/valueset-expansion';
 import { buildDeduplicatedIndexMap } from '@/lib/valueset-utils';
 import { useSettings } from '@/contexts/SettingsContext';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ImplementationGuideView } from '@/components/implementation-guide-view';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -399,30 +401,39 @@ export default function ExploreMode() {
 
         {/* Rule display (structured view) or fallback to flat view */}
         {hasRuleStructure ? (
-          <>
-            <RuleDisplay
-              report={selectedReport}
-              expandedData={expandedData?.error ? null : expandedData}
-              isExpanding={isExpanding}
-              totalValueSets={selectedReport.valueSets.length}
-              onExpandClick={handleExpandReport}
-              onCancel={handleCancel}
-              allReports={allReports}
-            />
-            {expandedData?.error && (
-              <Card className="border-destructive">
-                <CardContent className="pt-6">
-                  <div className="flex items-start gap-3">
-                    <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
-                    <div>
-                      <h3 className="font-semibold text-destructive mb-1">Expansion Error</h3>
-                      <p className="text-sm text-muted-foreground">{expandedData.error}</p>
+          <Tabs defaultValue="rules" className="w-full">
+            <TabsList>
+              <TabsTrigger value="rules">Rules & codes</TabsTrigger>
+              <TabsTrigger value="guide">Implementation guide</TabsTrigger>
+            </TabsList>
+            <TabsContent value="rules" className="space-y-6 mt-4">
+              <RuleDisplay
+                report={selectedReport}
+                expandedData={expandedData?.error ? null : expandedData}
+                isExpanding={isExpanding}
+                totalValueSets={selectedReport.valueSets.length}
+                onExpandClick={handleExpandReport}
+                onCancel={handleCancel}
+                allReports={allReports}
+              />
+              {expandedData?.error && (
+                <Card className="border-destructive">
+                  <CardContent className="pt-6">
+                    <div className="flex items-start gap-3">
+                      <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
+                      <div>
+                        <h3 className="font-semibold text-destructive mb-1">Expansion Error</h3>
+                        <p className="text-sm text-muted-foreground">{expandedData.error}</p>
+                      </div>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-          </>
+                  </CardContent>
+                </Card>
+              )}
+            </TabsContent>
+            <TabsContent value="guide" className="mt-4">
+              <ImplementationGuideView report={selectedReport} allReports={allReports} />
+            </TabsContent>
+          </Tabs>
         ) : (
           <>
             {/* Flat expand card fallback (no criteria groups) */}

@@ -11,7 +11,7 @@ import type {
   RestrictionCondition,
 } from '@/lib/types';
 import { formatColumnFilterRange, formatOperator, formatRelationship, formatRestriction, formatRangeBoundary } from '@/lib/rule-format-utils';
-import { generateValueSetFriendlyName } from '@/lib/valueset-utils';
+import { generateValueSetFriendlyName, generateValueSetHash } from '@/lib/valueset-utils';
 
 export interface ValueSetSummary {
   id: string;
@@ -121,7 +121,7 @@ export interface RuleDecisionSummary {
   operator: string | null;
   passAction: string;
   failAction: string;
-  clauseType: 'must-match' | 'must-not-match' | 'include-if-match' | 'include-if-not-match' | 'informational';
+  clauseType: 'must-match' | 'must-not-match' | 'include-if-match' | 'include-if-match-else-next' | 'include-if-not-match' | 'informational';
   clauseText: string;
   criteria: string[];
   criteriaDetails: CriterionLogicSummary[];
@@ -145,6 +145,7 @@ export interface ParentChainEntry {
     codeSystem: string;
     cluster: string | null;
     codeCount: number;
+    hash: string;
   }>;
 }
 
@@ -236,9 +237,11 @@ function formatLibraryItemReference(ref: string, allReports: EmisReport[]): stri
 }
 
 export function formatValueSetPreview(vs: EmisValueSet): string {
-  const displayNames = vs.values
-    .map((v) => v.displayName)
-    .filter(Boolean);
+  const displayNames = [...new Set(
+    vs.values
+      .map((v) => v.displayName)
+      .filter(Boolean)
+  )];
 
   if (displayNames.length > 0) {
     const preview = displayNames.slice(0, 3).join(', ');
@@ -389,6 +392,21 @@ export function getParentPopulation(report: EmisReport, allReports: EmisReport[]
     return `Based on another search (${report.parentReportId})`;
   }
   return report.parentType || 'Not specified';
+}
+
+/**
+ * Sentence-internal version of getParentPopulation: lowercase lead-in,
+ * search names preserved verbatim (never lowercased).
+ */
+function describeStartingPopulation(report: EmisReport, allReports: EmisReport[]): string {
+  if (report.parentType === 'ACTIVE') return 'currently registered patients';
+  if (report.parentType === 'ALL') return 'all patients (including deducted and deceased)';
+  if (report.parentType === 'POP') {
+    const parentReport = allReports.find((r) => r.xmlId === report.parentReportId);
+    if (parentReport) return `the patients found by "${parentReport.searchName}"`;
+    return 'the patients found by another search';
+  }
+  return (report.parentType || 'an unspecified population').toLowerCase();
 }
 
 function buildValueSetSummary(vs: EmisValueSet, friendlyNameMap: Map<string, string>): ValueSetSummary {
@@ -721,7 +739,7 @@ function buildCriterionPhrase(criterion: SearchCriterion): string {
   const parts: string[] = [];
   const { dedupedValueSets, extraValueSets, filters, restrictions } = getCriterionDisplayData(criterion);
   const label = criterion.displayName || criterion.table;
-  parts.push(`${label} [${criterion.table}]`);
+  parts.push(label);
   if (criterion.negation) {
     parts.push('NOT');
   }
@@ -760,6 +778,8 @@ function getClauseType(passAction: string, failAction: string): RuleDecisionSumm
   if (passAction === 'Next rule' && failAction === 'Exclude') return 'must-match';
   if (passAction === 'Exclude' && failAction === 'Next rule') return 'must-not-match';
   if (passAction === 'Include' && failAction === 'Exclude') return 'include-if-match';
+  // OR-cascade: matching patients are included and stop; others try the next rule
+  if (passAction === 'Include' && failAction === 'Next rule') return 'include-if-match-else-next';
   if (passAction === 'Exclude' && failAction === 'Include') return 'include-if-not-match';
   return 'informational';
 }
@@ -772,6 +792,8 @@ function clauseTextForType(clauseType: RuleDecisionSummary['clauseType'], clause
       return `Must not match: ${clauseText}`;
     case 'include-if-match':
       return `Included if matches: ${clauseText}`;
+    case 'include-if-match-else-next':
+      return `Included if matches (otherwise next rule): ${clauseText}`;
     case 'include-if-not-match':
       return `Included if it does not match: ${clauseText}`;
     default:
@@ -879,9 +901,10 @@ function buildAgentInterpretation(report: EmisReport, allReports: EmisReport[]) 
   const excludedClauses = decisionFlow
     .filter((decision) => decision.clauseType === 'must-not-match')
     .map((decision) => decision.clauseText.replace(/^Must not match:\s*/, ''));
-  const finalIncludeClauses = decisionFlow
-    .filter((decision) => decision.clauseType === 'include-if-match')
-    .map((decision) => decision.clauseText.replace(/^Included if matches:\s*/, ''));
+  // OR-cascade rules plus a final include-if-match form one "any of" chain
+  const anyOfClauses = decisionFlow
+    .filter((decision) => decision.clauseType === 'include-if-match-else-next' || decision.clauseType === 'include-if-match')
+    .map((decision) => decision.clauseText.replace(/^Included if matches( \(otherwise next rule\))?:\s*/, ''));
   const finalIncludeNotClauses = decisionFlow
     .filter((decision) => decision.clauseType === 'include-if-not-match')
     .map((decision) => decision.clauseText.replace(/^Included if it does not match:\s*/, ''));
@@ -889,11 +912,15 @@ function buildAgentInterpretation(report: EmisReport, allReports: EmisReport[]) 
   const booleanLogicParts: string[] = [];
   for (const clause of requiredClauses) booleanLogicParts.push(`(${clause})`);
   for (const clause of excludedClauses) booleanLogicParts.push(`NOT (${clause})`);
-  for (const clause of finalIncludeClauses) booleanLogicParts.push(`(${clause})`);
+  if (anyOfClauses.length === 1) {
+    booleanLogicParts.push(`(${anyOfClauses[0]})`);
+  } else if (anyOfClauses.length > 1) {
+    booleanLogicParts.push(`(${anyOfClauses.map((clause) => `(${clause})`).join(' OR ')})`);
+  }
   for (const clause of finalIncludeNotClauses) booleanLogicParts.push(`NOT (${clause})`);
 
   const summaryParts = [
-    `Start with ${getParentPopulation(report, allReports).toLowerCase()}.`,
+    `Start with ${describeStartingPopulation(report, allReports)}.`,
   ];
   if (requiredClauses.length > 0) {
     summaryParts.push(`Require ${requiredClauses.map((clause) => toSentenceCase(clause)).join('; ')}.`);
@@ -901,8 +928,10 @@ function buildAgentInterpretation(report: EmisReport, allReports: EmisReport[]) 
   if (excludedClauses.length > 0) {
     summaryParts.push(`Exclude patients who match ${excludedClauses.map((clause) => toSentenceCase(clause)).join('; ')}.`);
   }
-  if (finalIncludeClauses.length > 0) {
-    summaryParts.push(`Finally include patients who match ${finalIncludeClauses.map((clause) => toSentenceCase(clause)).join('; ')}.`);
+  if (anyOfClauses.length === 1) {
+    summaryParts.push(`Include patients who match ${toSentenceCase(anyOfClauses[0])}.`);
+  } else if (anyOfClauses.length > 1) {
+    summaryParts.push(`Include patients who match any of: ${anyOfClauses.map((clause) => toSentenceCase(clause)).join('; OR ')}.`);
   }
   if (finalIncludeNotClauses.length > 0) {
     summaryParts.push(`Finally include patients who do not match ${finalIncludeNotClauses.map((clause) => toSentenceCase(clause)).join('; ')}.`);
@@ -911,7 +940,7 @@ function buildAgentInterpretation(report: EmisReport, allReports: EmisReport[]) 
   return {
     decisionFlow,
     dependencies: buildDependencies(report, allReports),
-    inclusionCriteria: [...requiredClauses, ...finalIncludeClauses],
+    inclusionCriteria: [...requiredClauses, ...anyOfClauses],
     exclusionCriteria: excludedClauses,
     booleanLogic: booleanLogicParts.join(' AND ') || null,
     plainEnglishSummary: summaryParts.join(' '),
@@ -948,6 +977,7 @@ function buildParentChain(report: EmisReport, allReports: EmisReport[]): ParentC
         codeSystem: vs.codeSystem,
         cluster: vs.cluster,
         codeCount: vs.codeCount,
+        hash: shortValueSetHash(vs),
       })),
     });
     current = parent;
@@ -956,147 +986,380 @@ function buildParentChain(report: EmisReport, allReports: EmisReport[]): ParentC
   return chain;
 }
 
-function addCriterionDetailMarkdown(lines: string[], criterion: CriterionLogicSummary, indent = '') {
-  lines.push(`${indent}- ${criterion.displayName} [${criterion.table}]${criterion.negation ? ' (NOT)' : ''}`);
-  if (criterion.valueSets.length > 0) {
-    lines.push(`${indent}  - ValueSets: ${criterion.valueSets.map((vs) => `\`${vs.friendlyName}\``).join(', ')}`);
+// === Human-readable implementation guide ===
+
+const TABLE_LABELS: Record<string, string> = {
+  EVENTS: 'clinical events',
+  MEDICATION_ISSUES: 'medication issues',
+  MEDICATION_COURSES: 'medication courses',
+  PATIENTS: 'patient details',
+  REGISTRATION: 'registration details',
+};
+
+const COLUMN_LABELS: Record<string, string> = {
+  READCODE: 'code',
+  SNOMEDCODE: 'code',
+  DRUGCODE: 'drug code',
+  NUMERIC_VALUE: 'numeric value',
+  VALUE: 'value',
+  DATE: 'date',
+  AGE: 'age',
+  AGE_AT_EVENT: 'age at event',
+  DOB: 'date of birth',
+  GMS_DATE_OF_REGISTRATION: 'registration date',
+  GMS_REGISTRATION_DATE: 'registration date',
+  EPISODE: 'episode type',
+  ISSUE_DATE: 'issue date',
+};
+
+function tableLabel(table: string): string {
+  return TABLE_LABELS[table?.toUpperCase()] || table?.toLowerCase() || 'records';
+}
+
+function columnLabel(column: string): string {
+  return COLUMN_LABELS[column?.toUpperCase()] || column?.replace(/_/g, ' ').toLowerCase() || '';
+}
+
+function describeValueSetRef(vs: ValueSetSummary): string {
+  const cluster = vs.cluster ? ` — cluster ${vs.cluster}` : '';
+  return `\`${vs.friendlyName}\` (${vs.codeCount} code${vs.codeCount === 1 ? '' : 's'}${cluster})`;
+}
+
+/** "This FISCALYEAR RELATIVE" → "in this fiscal year" */
+function humanizeRawTemporal(value: string): string {
+  const match = value.match(/^(Last|This|Next)\s+([A-Z]+)(?:\s+RELATIVE)?$/i);
+  if (!match) return value;
+  const unit = UNIT_WORDS[match[2].toUpperCase()] || match[2].toLowerCase();
+  return `in ${match[1].toLowerCase()} ${unit}`;
+}
+
+const UNIT_WORDS: Record<string, string> = {
+  DAY: 'day',
+  WEEK: 'week',
+  MONTH: 'month',
+  QUARTER: 'quarter',
+  YEAR: 'year',
+  FISCALYEAR: 'fiscal year',
+};
+
+/** "Date IN within the last 1 year" → "date within the last 1 year" */
+function humanFilter(filter: CriterionFilterSummary): string {
+  const label = columnLabel(filter.columns[0] || '') || (filter.displayName || '').toLowerCase();
+  if (filter.valueSets.length > 0) {
+    return `${label} in ${filter.valueSets.map(describeValueSetRef).join(', ')}`;
   }
-  if (criterion.extraValueSets.length > 0) {
-    lines.push(`${indent}  - Additional ValueSets: ${criterion.extraValueSets.map((vs) => `\`${vs.friendlyName}\``).join(', ')}`);
+  const value = filter.range?.rendered || filter.singleValue || '';
+  if (!value) return label;
+  const negated = filter.operator?.toUpperCase() === 'NOTIN' ? 'not ' : '';
+  return `${label} ${negated}${humanizeRawTemporal(value)}`.trim();
+}
+
+/** "Earliest 1 where SNOMED code IN: COPD_COD" → "keep only the earliest matching record, and require its code to be in: COPD_COD" */
+function humanRestriction(restriction: CriterionRestrictionSummary): string {
+  const match = restriction.description.match(/^(Earliest|Latest)\s+(\d+)\s*(.*)$/i);
+  if (!match) return restriction.description;
+
+  const direction = match[1].toLowerCase();
+  const count = parseInt(match[2], 10);
+  const remainder = match[3]?.trim() || '';
+  const records = count === 1 ? `the ${direction} matching record` : `the ${direction} ${count} matching records`;
+
+  let conditionText = '';
+  const whereMatch = remainder.match(/^where\s+(.*)$/i);
+  if (whereMatch) {
+    conditionText = `, and require its ${whereMatch[1]
+      .replace(/^SNOMED code/i, 'code')
+      .replace(/^numeric value/i, 'numeric value')}`;
+    conditionText = conditionText.replace(/ IN:/, ' to be in:');
+  } else if (remainder) {
+    conditionText = `, ${remainder}`;
   }
-  if (criterion.relationship) {
-    lines.push(`${indent}  - Relationship: ${criterion.relationship.rendered}`);
+
+  return `Keep only ${records}${conditionText}`;
+}
+
+/** "DATE at least 93 days before ... parent record's DATE" → "its date at least 93 days before ... the date of the record above" */
+function humanRelationship(relationship: RelationshipSummary): string {
+  let text = relationship.rendered;
+  text = text.replace(/parent record's\s+([A-Z_]+)/i, (_, col) => `the ${columnLabel(col)} of the record above`);
+  text = text.replace(/^([A-Z_]+)\s/, (_, col) => `its ${columnLabel(col)} `);
+  return text;
+}
+
+function addHumanCriterion(lines: string[], criterion: CriterionLogicSummary, indent = '') {
+  const negation = criterion.negation ? ' — patient must NOT have a matching record' : '';
+  // Skip the table label when it just repeats the display name ("Patient Details (patient details)")
+  const label = tableLabel(criterion.table);
+  const tableSuffix = criterion.displayName.toLowerCase() === label ? '' : ` (${label})`;
+  lines.push(`${indent}- **${criterion.displayName}**${tableSuffix}${negation}`);
+
+  const allValueSets = [...criterion.valueSets, ...criterion.extraValueSets];
+  if (allValueSets.length > 0) {
+    lines.push(`${indent}  - Code in: ${allValueSets.map(describeValueSetRef).join(', or ')}`);
   }
   for (const filter of criterion.filters) {
-    lines.push(`${indent}  - Filter: ${filter.rendered}`);
-    if (filter.range?.from) {
-      lines.push(`${indent}    - From: ${filter.range.from.rendered}`);
+    // Skip code filters already covered by the ValueSets line
+    if (filter.columns[0]?.toUpperCase() === 'READCODE' && filter.valueSets.length > 0) {
+      const covered = filter.valueSets.every((vs) => allValueSets.some((avs) => avs.friendlyName === vs.friendlyName));
+      if (covered) continue;
     }
-    if (filter.range?.to) {
-      lines.push(`${indent}    - To: ${filter.range.to.rendered}`);
-    }
-    if (filter.valueSets.length > 0) {
-      lines.push(`${indent}    - Filter ValueSets: ${filter.valueSets.map((vs) => `\`${vs.friendlyName}\``).join(', ')}`);
-    }
+    // Skip filters that carry no condition (operator-only boundaries render empty)
+    const rendered = humanFilter(filter);
+    if (!rendered || rendered === columnLabel(filter.columns[0] || '')) continue;
+    lines.push(`${indent}  - Where ${rendered}`);
   }
   for (const restriction of criterion.restrictions) {
-    lines.push(`${indent}  - Restriction: ${restriction.description}`);
-    for (const condition of restriction.conditions) {
-      const parts = [`${condition.column} ${condition.operatorSymbol || condition.operator}`];
-      if (condition.valueSets.length > 0) parts.push(condition.valueSets.join(', '));
-      if (condition.rangeValues.length > 0) parts.push(condition.rangeValues.join(' and '));
-      lines.push(`${indent}    - Condition: ${parts.join(' | ')}`);
-    }
+    lines.push(`${indent}  - ${humanRestriction(restriction)}`);
   }
   for (const linked of criterion.linkedCriteria) {
-    lines.push(`${indent}  - Linked criterion:`);
-    addCriterionDetailMarkdown(lines, linked, `${indent}    `);
+    const relationshipText = linked.relationship
+      ? ` (${humanRelationship(linked.relationship)})`
+      : '';
+    lines.push(`${indent}  - Must also have a linked record${relationshipText}:`);
+    addHumanCriterion(lines, linked, `${indent}    `);
   }
 }
 
-function buildImplementationGuideMarkdown(report: EmisReport, allReports: EmisReport[]) {
+function ruleFlowSentence(
+  clauseType: RuleDecisionSummary['clauseType'],
+  ruleNumber: number,
+  totalRules: number,
+): string {
+  const next = ruleNumber < totalRules ? `Rule ${ruleNumber + 1}` : 'the next rule';
+  switch (clauseType) {
+    case 'include-if-match-else-next':
+      return `If a patient matches this rule they are **included** and no further rules are checked. If not, continue to ${next}.`;
+    case 'must-match':
+      return `Patients **must match** this rule to stay in. Those who match continue to ${next}; those who do not are excluded.`;
+    case 'must-not-match':
+      return `Patients matching this rule are **excluded** and no further rules are checked. Everyone else continues to ${next}.`;
+    case 'include-if-match':
+      return 'Final rule: patients who match are **included**; everyone else is excluded.';
+    case 'include-if-not-match':
+      return 'Final rule: patients who match are **excluded**; everyone else is included.';
+    default:
+      return 'This rule does not change who is included.';
+  }
+}
+
+/** Collects every ValueSet referenced by a report's rules, deduped by friendly name */
+function collectReferencedValueSets(report: EmisReport): ValueSetSummary[] {
+  const friendlyNameMap = buildFriendlyNameMap(report);
+  const byName = new Map<string, ValueSetSummary>();
+
+  const addVs = (vs: EmisValueSet) => {
+    const summary = buildValueSetSummary(vs, friendlyNameMap);
+    if (!byName.has(summary.friendlyName)) {
+      byName.set(summary.friendlyName, summary);
+    }
+  };
+  const visit = (criteria: SearchCriterion[]) => {
+    for (const criterion of criteria) {
+      criterion.valueSets.forEach(addVs);
+      for (const filter of criterion.columnFilters) {
+        (filter.valueSets ?? []).forEach(addVs);
+      }
+      visit(criterion.linkedCriteria);
+    }
+  };
+  for (const group of report.criteriaGroups ?? []) visit(group.criteria);
+  for (const group of report.columnGroups ?? []) visit(group.criteria);
+  report.valueSets.forEach(addVs);
+
+  return Array.from(byName.values()).sort((a, b) => a.friendlyName.localeCompare(b.friendlyName));
+}
+
+function shortValueSetHash(summary: ValueSetSummary): string {
+  return generateValueSetHash(summary.codes.map((code) => code.code).sort()).substring(0, 8);
+}
+
+function escapeTableCell(text: string): string {
+  return text.replace(/\|/g, '\\|').replace(/\n/g, ' ');
+}
+
+export function buildImplementationGuideMarkdown(report: EmisReport, allReports: EmisReport[]): string {
   const currentSummary = buildAgentInterpretation(report, allReports);
   const parentChain = buildParentChain(report, allReports);
   const lines: string[] = [];
 
-  lines.push(`# Implementation Guide: ${report.searchName}`);
-  lines.push('');
-  lines.push('Important: This markdown is a readable guide. For exact operators, ranges, thresholds, restrictions, and linked-criterion logic, inspect `report.agentInterpretation.decisionFlow[].criteriaDetails` in the JSON response.');
-  lines.push('');
-  lines.push(`Target report: ${report.name}`);
-  lines.push(`Parent population: ${getParentPopulation(report, allReports)}`);
-  lines.push('');
-  lines.push('## Parent Chain');
-  if (parentChain.length === 0) {
-    lines.push('- No parent reports.');
-  } else {
-    for (const parent of parentChain) {
-      lines.push(`- ${parent.searchName}: ${parent.plainEnglishSummary}`);
-      if (parent.unresolvedLibraryItems.length > 0) {
-        const labels = parent.unresolvedLibraryItems.map((item) =>
-          item.inferredName ? `${item.inferredName} (${item.ref})` : item.ref
-        );
-        lines.push(`  Library refs: ${labels.join(', ')}`);
-      }
-    }
-  }
-  lines.push('');
-  lines.push('## Library Items');
-  if (currentSummary.dependencies.libraryItems.length === 0 && parentChain.every((parent) => parent.unresolvedLibraryItems.length === 0)) {
-    lines.push('- None');
-  } else {
-    for (const parent of parentChain.slice().reverse()) {
-      for (const item of parent.unresolvedLibraryItems) {
-        const wrapperList = item.wrapperReports.length > 0
-          ? `; wrapper reports: ${item.wrapperReports.map((wrapper) => wrapper.searchName).join(', ')}`
-          : '';
-        lines.push(`- ${parent.searchName}: ${item.inferredName || 'Unknown library item'} (${item.ref})${wrapperList}`);
-      }
-    }
-    for (const item of currentSummary.dependencies.libraryItems) {
-      const wrapperList = item.wrapperReports.length > 0
-        ? `; wrapper reports: ${item.wrapperReports.map((wrapper) => wrapper.searchName).join(', ')}`
-        : '';
-      lines.push(`- ${report.searchName}: ${item.inferredName || 'Unknown library item'} (${item.ref})${wrapperList}`);
-    }
-  }
-  lines.push('');
-  lines.push('## Target Report Logic');
-  lines.push(currentSummary.plainEnglishSummary);
-  if (currentSummary.booleanLogic) {
-    lines.push('');
-    lines.push('Boolean logic:');
-    lines.push(currentSummary.booleanLogic);
-  }
-  lines.push('');
-  lines.push('## Detailed Rule Logic');
-  for (const rule of currentSummary.decisionFlow) {
-    lines.push(`### ${rule.label}`);
-    lines.push(`- Clause type: ${rule.clauseType}`);
-    lines.push(`- Pass: ${rule.passAction}`);
-    lines.push(`- Fail: ${rule.failAction}`);
-    if (rule.operator) {
-      lines.push(`- Operator: ${rule.operator}`);
-    }
-    lines.push(`- Summary: ${rule.clauseText}`);
-    for (const population of rule.populationCriteria) {
-      lines.push(`- Population ref: ${population.searchName} (${population.xmlId})`);
-    }
-    for (const libraryItem of rule.libraryItems) {
-      lines.push(`- Library item: ${libraryItem.inferredName || 'Unknown library item'} (${libraryItem.ref})`);
-    }
-    for (const criterion of rule.criteriaDetails) {
-      addCriterionDetailMarkdown(lines, criterion);
-    }
-    lines.push('');
-  }
-  lines.push('');
-  lines.push('## ValueSet Friendly Names');
+  const folderPath = report.rule.split(' > ').slice(1).join(' > ');
+  const sourceFile = report.rule.split(' > ')[0] || '';
 
-  const addReportValueSets = (label: string, entries: Array<{ friendlyName: string; preview: string; codeSystem: string; cluster: string | null; codeCount: number }>) => {
-    lines.push(`### ${label}`);
-    for (const entry of entries) {
-      lines.push(`- \`${entry.friendlyName}\` (${entry.codeSystem}, ${entry.codeCount} codes): ${entry.preview}${entry.cluster ? ` | Cluster: ${entry.cluster}` : ''}`);
+  lines.push(`# ${report.searchName}`);
+  lines.push('');
+  if (report.searchName !== report.name) lines.push(`Report title: ${report.name}`);
+  if (folderPath) lines.push(`Folder: ${folderPath}`);
+  if (sourceFile) lines.push(`Source: ${sourceFile}`);
+  if (report.description) lines.push(`Description: ${report.description}`);
+  lines.push('');
+
+  // --- Overview ---
+  lines.push('## What this search does');
+  lines.push('');
+  const criteriaRules = currentSummary.decisionFlow.filter((rule) => rule.kind === 'criteria-group');
+  const overview: string[] = [`Start with ${describeStartingPopulation(report, allReports)}${parentChain.length > 0 ? ' (see below)' : ''}.`];
+
+  const ruleNumbersOf = (type: RuleDecisionSummary['clauseType']) =>
+    criteriaRules
+      .map((rule, idx) => ({ rule, n: idx + 1 }))
+      .filter(({ rule }) => rule.clauseType === type)
+      .map(({ n }) => n);
+
+  const mustNumbers = ruleNumbersOf('must-match');
+  const excludeNumbers = ruleNumbersOf('must-not-match');
+  const anyOfNumbers = [...ruleNumbersOf('include-if-match-else-next'), ...ruleNumbersOf('include-if-match')].sort((a, b) => a - b);
+  const includeNotNumbers = ruleNumbersOf('include-if-not-match');
+
+  const listRules = (numbers: number[]) => {
+    if (numbers.length === 1) return `Rule ${numbers[0]}`;
+    // Compress consecutive runs: [1,2,3,4,6] -> "Rules 1-4 and 6"
+    const runs: string[] = [];
+    let start = numbers[0];
+    let prev = numbers[0];
+    for (const n of [...numbers.slice(1), NaN]) {
+      if (n === prev + 1) {
+        prev = n;
+        continue;
+      }
+      runs.push(start === prev ? `${start}` : `${start}-${prev}`);
+      start = n;
+      prev = n;
     }
-    if (entries.length === 0) {
-      lines.push('- None');
-    }
+    return `Rules ${runs.join(', ').replace(/, ([^,]+)$/, ' and $1')}`;
   };
 
-  for (const parent of parentChain.slice().reverse()) {
-    addReportValueSets(parent.searchName, parent.valueSets);
+  if (mustNumbers.length > 0) overview.push(`Patients must match ${listRules(mustNumbers)} to stay in.`);
+  if (excludeNumbers.length > 0) overview.push(`Patients matching ${listRules(excludeNumbers)} are excluded.`);
+  if (anyOfNumbers.length === 1) overview.push(`A patient is included when they match ${listRules(anyOfNumbers)}.`);
+  if (anyOfNumbers.length > 1) overview.push(`A patient is included when they match any one of ${listRules(anyOfNumbers)}.`);
+  if (includeNotNumbers.length > 0) overview.push(`${listRules(includeNotNumbers)} includes only patients who do NOT match it.`);
+  if (criteriaRules.length === 0) overview.push('This report has no filtering rules of its own — it reports on its starting population.');
+  lines.push(overview.join(' '));
+  lines.push('');
+
+  // --- Parent populations ---
+  lines.push('## Who we start with');
+  lines.push('');
+  if (parentChain.length === 0) {
+    lines.push(`${getParentPopulation(report, allReports)}.`);
+  } else {
+    const ordered = parentChain.slice().reverse(); // base population first
+    ordered.forEach((parent, idx) => {
+      lines.push(`${idx + 1}. **${parent.searchName}** — ${parent.plainEnglishSummary}`);
+    });
+    lines.push(`${ordered.length + 1}. **This search** then applies the rules below to that population.`);
   }
-  const currentFriendlyNameMap = buildFriendlyNameMap(report);
-  addReportValueSets(report.searchName, getUniqueValueSets(report).map((vs) => {
-    const summary = buildValueSetSummary(vs, currentFriendlyNameMap);
-    return {
-      friendlyName: summary.friendlyName,
-      preview: summary.preview,
-      codeSystem: summary.codeSystem,
-      cluster: summary.cluster,
-      codeCount: summary.codeCount,
-    };
-  }));
+  lines.push('');
+
+  // --- Rules ---
+  lines.push('## Inclusion logic, step by step');
+  lines.push('');
+  if (criteriaRules.length === 0) {
+    lines.push('No rules — all patients from the starting population are included.');
+    lines.push('');
+  }
+  criteriaRules.forEach((rule, idx) => {
+    const n = idx + 1;
+    lines.push(`### Rule ${n} of ${criteriaRules.length}`);
+    lines.push('');
+    lines.push(ruleFlowSentence(rule.clauseType, n, criteriaRules.length));
+    lines.push('');
+
+    const parts = rule.criteriaDetails.length + rule.populationCriteria.length + rule.libraryItems.length;
+    if (parts > 1) {
+      lines.push(rule.operator === 'OR'
+        ? 'A patient matches this rule when ANY of the following is true:'
+        : 'A patient matches this rule when ALL of the following are true:');
+    } else if (parts === 1) {
+      lines.push('A patient matches this rule when:');
+    }
+    for (const population of rule.populationCriteria) {
+      lines.push(`- They appear in the results of the search **${population.searchName}**`);
+    }
+    for (const libraryItem of rule.libraryItems) {
+      const name = libraryItem.inferredName ? `**${libraryItem.inferredName}**` : `\`${libraryItem.ref}\``;
+      lines.push(`- They match the EMIS library item ${name} (see Caveats)`);
+    }
+    for (const criterion of rule.criteriaDetails) {
+      addHumanCriterion(lines, criterion);
+    }
+    lines.push('');
+  });
+
+  // --- Report output columns ---
+  const columnRules = currentSummary.decisionFlow.filter((rule) => rule.kind === 'column-group');
+  if (columnRules.length > 0) {
+    lines.push('## Report output');
+    lines.push('');
+    lines.push('These define what the report shows for each patient, not who is included.');
+    lines.push('');
+    for (const rule of columnRules) {
+      lines.push(`### ${rule.label}`);
+      for (const criterion of rule.criteriaDetails) {
+        addHumanCriterion(lines, criterion);
+      }
+      lines.push('');
+    }
+  }
+
+  // --- Code lists ---
+  lines.push('## Code lists used');
+  lines.push('');
+  const valueSetRows: Array<{ search: string; vs: { friendlyName: string; cluster: string | null; codeSystem: string; codeCount: number; preview: string; hash: string } }> = [];
+  for (const parent of parentChain.slice().reverse()) {
+    for (const vs of parent.valueSets) {
+      valueSetRows.push({ search: parent.searchName, vs });
+    }
+  }
+  for (const summary of collectReferencedValueSets(report)) {
+    valueSetRows.push({
+      search: report.searchName,
+      vs: {
+        friendlyName: summary.friendlyName,
+        cluster: summary.cluster,
+        codeSystem: summary.codeSystem,
+        codeCount: summary.codeCount,
+        preview: summary.preview,
+        hash: shortValueSetHash(summary),
+      },
+    });
+  }
+  if (valueSetRows.length === 0) {
+    lines.push('None.');
+  } else {
+    lines.push('Names below match `valueset_friendly_name` in the extraction CSVs. The hash identifies the exact code list content, so a changed hash means the codes changed.');
+    lines.push('');
+    lines.push('| Search | Code list | Cluster | System | Codes | Content | Hash |');
+    lines.push('| --- | --- | --- | --- | --- | --- | --- |');
+    for (const row of valueSetRows) {
+      const preview = row.vs.preview.length > 80 ? `${row.vs.preview.substring(0, 77)}...` : row.vs.preview;
+      lines.push(`| ${escapeTableCell(row.search)} | \`${row.vs.friendlyName}\` | ${escapeTableCell(row.vs.cluster || '')} | ${row.vs.codeSystem} | ${row.vs.codeCount} | ${escapeTableCell(preview)} | ${row.vs.hash} |`);
+    }
+  }
+  lines.push('');
+
+  // --- Caveats ---
+  lines.push('## Caveats');
+  lines.push('');
+  const caveats: string[] = [];
+  const libraryCaveat = (searchName: string, item: LibraryItemReferenceSummary) => {
+    const inferred = item.inferredName
+      ? ` It is likely **${item.inferredName}** (inferred from wrapper report${item.wrapperReports.length === 1 ? '' : 's'} ${item.wrapperReports.map((wrapper) => `"${wrapper.searchName}"`).join(', ')}), but this is not certain.`
+      : '';
+    return `${searchName} references the EMIS library item \`${item.ref}\`, whose logic is not included in this XML export.${inferred} Verify it in EMIS before implementing.`;
+  };
+  for (const parent of parentChain.slice().reverse()) {
+    for (const item of parent.unresolvedLibraryItems) caveats.push(libraryCaveat(parent.searchName, item));
+  }
+  for (const item of currentSummary.dependencies.libraryItems) caveats.push(libraryCaveat('This search', item));
+  const hasExceptions = report.valueSets.some((vs) => vs.exceptions.length > 0);
+  if (hasExceptions) {
+    caveats.push('Some code lists exclude specific codes. See `exceptions.csv` in the extraction for the excluded codes and whether each was applied.');
+  }
+  caveats.push('This guide is generated from the EMIS XML export. Validate it against the source search in EMIS before implementing.');
+  for (const caveat of caveats) {
+    lines.push(`- ${caveat}`);
+  }
 
   return lines.join('\n').trim();
 }
