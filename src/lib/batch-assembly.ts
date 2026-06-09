@@ -3,9 +3,12 @@
  * Builds metadata (failed codes, exceptions, original codes) from raw expansion results.
  */
 
-import { TranslatedCode, SnomedConcept, RawValueSetExpansion } from './types';
+import { TranslatedCode, SnomedConcept, RawValueSetExpansion, EmisReport, EmisValueSet, EquivalenceFilter } from './types';
 import { isDmdCode } from './code-system-utils';
 import { formatForSql } from './sql-formatter';
+import { prepareValueSetForExpansion } from './valueset-expansion';
+import { buildFormattedEclExpression } from './ecl-builder';
+import { generateValueSetFriendlyName, generateValueSetId } from './valueset-utils';
 
 export interface OriginalCodeMetadata {
   originalCode: string;
@@ -153,6 +156,207 @@ export function buildExceptionsMetadata(
       translationError: null,
     };
   });
+}
+
+/** One ValueSet occurrence within a report, keyed by content hash for dedup */
+export interface ExtractionInstance {
+  report: EmisReport;
+  vsIndex: number;
+  vs: EmisValueSet;
+  hash: string;
+}
+
+export interface NormalizedTables {
+  reports: any[];
+  valuesets: any[];
+  originalCodes: any[];
+  expandedConcepts: any[];
+  failedCodes: any[];
+  exceptions: any[];
+}
+
+/**
+ * Builds the normalized output tables from expansion results.
+ * Instances whose hash failed get a valuesets row with expansion_error set
+ * (plus original codes and exceptions, which don't depend on expansion) —
+ * one failure never discards the rest of the extraction.
+ */
+export function buildNormalizedTables(
+  selectedReports: EmisReport[],
+  instances: ExtractionInstance[],
+  expandedByHash: Map<string, RawValueSetExpansion>,
+  failedByHash: Map<string, string>,
+  translations: Record<string, TranslatedCode | null>,
+  historical: Record<string, string>,
+  equivalenceFilter: EquivalenceFilter,
+): NormalizedTables {
+  const tables: NormalizedTables = {
+    reports: [],
+    valuesets: [],
+    originalCodes: [],
+    expandedConcepts: [],
+    failedCodes: [],
+    exceptions: [],
+  };
+  const expandedAt = new Date().toISOString();
+
+  for (const report of selectedReports) {
+    tables.reports.push({
+      report_id: report.id,
+      report_xml_id: report.xmlId,
+      report_name: report.name,
+      search_name: report.searchName,
+      description: report.description || '',
+      parent_type: report.parentType || '',
+      parent_report_id: report.parentReportId || '',
+      folder_path: report.rule,
+      xml_file_name: report.rule.split(' > ')[0] || 'unknown.xml',
+      equivalence_filter_setting: equivalenceFilter,
+      parsed_at: expandedAt,
+    });
+  }
+
+  for (const instance of instances) {
+    const prepared = prepareValueSetForExpansion(instance.vs, 0);
+    const codeIndices = prepared.parentCodes.map((_: string, idx: number) => idx);
+    const valueSetId = generateValueSetId(instance.report.id, instance.hash, instance.vsIndex);
+    const friendlyName = generateValueSetFriendlyName(instance.report.name, instance.vsIndex);
+
+    // ECL from resolved SNOMED codes — computable even when expansion failed
+    const eclValues = prepared.parentCodes.map((code: string, idx: number) => {
+      const translated = translations[code];
+      const snomedCode = translated?.code || code;
+      const currentCode = historical[snomedCode] || snomedCode;
+      return {
+        code: currentCode,
+        displayName: prepared.displayNames[idx],
+        includeChildren: prepared.includeChildren[idx],
+        isRefset: prepared.isRefset[idx],
+      };
+    });
+    const resolvedExcludedCodes = prepared.excludedCodes
+      .filter((code: string) => !!translations[code])
+      .map((code: string) => {
+        const translated = translations[code]!;
+        return historical[translated.code] || translated.code;
+      });
+    const eclExpression = buildFormattedEclExpression(eclValues, resolvedExcludedCodes);
+
+    const failureMessage = failedByHash.get(instance.hash);
+    const raw = expandedByHash.get(instance.hash);
+
+    const pushOriginalCodes = (originalCodes: OriginalCodeMetadata[]) => {
+      originalCodes.forEach((oc, idx) => {
+        tables.originalCodes.push({
+          original_code_id: `${valueSetId}-oc${idx}`,
+          valueset_id: valueSetId,
+          original_code: oc.originalCode,
+          display_name: oc.displayName,
+          code_system: oc.codeSystem,
+          include_children: oc.includeChildren || false,
+          is_refset: oc.isRefset || false,
+          translated_to_snomed_code: oc.translatedTo || '',
+          translated_to_display: oc.translatedToDisplay || '',
+        });
+      });
+    };
+
+    const pushExceptions = (exceptions: ExceptionMetadata[]) => {
+      exceptions.forEach((exception, excIdx) => {
+        tables.exceptions.push({
+          exception_id: `${valueSetId}-exc${excIdx}`,
+          valueset_id: valueSetId,
+          original_excluded_code: exception.originalExcludedCode,
+          original_excluded_display: exception.originalExcludedDisplay || '',
+          translated_to_snomed_code: exception.translatedToSnomedCode || '',
+          included_in_ecl: exception.includedInEcl || false,
+          translation_error: exception.translationError || '',
+        });
+      });
+    };
+
+    if (!raw) {
+      // Expansion failed for this hash — record the error, keep translation-derived rows
+      const originalCodes = buildOriginalCodesMetadata(
+        prepared.parentCodes, codeIndices, prepared.displayNames, prepared.codeSystems,
+        prepared.includeChildren, prepared.isRefset, translations, historical,
+      );
+      const exceptions = buildExceptionsMetadata(
+        prepared.excludedCodes, prepared.excludedDisplayNames, translations, historical,
+      );
+
+      tables.valuesets.push({
+        valueset_id: valueSetId,
+        report_id: instance.report.id,
+        valueset_index: instance.vsIndex,
+        valueset_hash: instance.hash,
+        valueset_friendly_name: friendlyName,
+        code_system: originalCodes[0]?.codeSystem || '',
+        ecl_expression: eclExpression || '',
+        expansion_error: failureMessage || 'Expansion did not complete',
+        expanded_at: expandedAt,
+      });
+      pushOriginalCodes(originalCodes);
+      pushExceptions(exceptions);
+      continue;
+    }
+
+    const assembled = assembleValueSetData(
+      raw,
+      prepared.parentCodes,
+      codeIndices,
+      prepared.excludedCodes,
+      prepared.excludedDisplayNames,
+      prepared.displayNames,
+      prepared.codeSystems,
+      prepared.includeChildren,
+      prepared.isRefset,
+      translations,
+      historical,
+    );
+
+    tables.valuesets.push({
+      valueset_id: valueSetId,
+      report_id: instance.report.id,
+      valueset_index: instance.vsIndex,
+      valueset_hash: instance.hash,
+      valueset_friendly_name: friendlyName,
+      code_system: assembled.originalCodes?.[0]?.codeSystem || '',
+      ecl_expression: eclExpression || '',
+      expansion_error: assembled.expansionError || '',
+      expanded_at: expandedAt,
+    });
+
+    pushOriginalCodes(assembled.originalCodes || []);
+
+    const parentCodesSet = new Set(assembled.parentCodes || []);
+    assembled.concepts?.forEach((concept, idx) => {
+      tables.expandedConcepts.push({
+        concept_id: `${valueSetId}-c${idx}`,
+        valueset_id: valueSetId,
+        snomed_code: concept.code,
+        display: concept.display,
+        source: concept.source || 'terminology_server',
+        exclude_children: concept.excludeChildren || false,
+        is_descendant: !parentCodesSet.has(concept.code),
+      });
+    });
+
+    assembled.failedCodes?.forEach((failed, idx) => {
+      tables.failedCodes.push({
+        failed_code_id: `${valueSetId}-failed${idx}`,
+        valueset_id: valueSetId,
+        original_code: failed.originalCode,
+        display_name: failed.displayName,
+        code_system: failed.codeSystem,
+        reason: failed.reason,
+      });
+    });
+
+    pushExceptions(assembled.exceptions || []);
+  }
+
+  return tables;
 }
 
 /** Assemble a full ValueSetGroup-equivalent from raw expansion + pre-computed maps */

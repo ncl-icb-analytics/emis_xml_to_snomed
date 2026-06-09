@@ -217,6 +217,31 @@ export async function expandRefsetFromRf2(refsetId: string): Promise<SnomedConce
 }
 
 /**
+ * Returns refset members with RF2 display names only — no terminology-server
+ * fallback, so duration is bounded by local file access. Returns null when
+ * the refset is not in RF2. Members missing an RF2 description have an empty
+ * display; callers resolve those separately.
+ */
+export function getRefsetMembersFromRf2(refsetId: string): SnomedConcept[] | null {
+  const cache = getRefsetCache();
+  const memberIds = cache.get(refsetId);
+
+  if (!memberIds || memberIds.size === 0) {
+    return null;
+  }
+
+  const memberIdsArray = Array.from(memberIds);
+  const displayNames = getConceptDisplayNames(memberIdsArray);
+
+  return memberIdsArray.map((code) => ({
+    code,
+    display: (displayNames.get(code) || '').trim(),
+    system: 'http://snomed.info/sct',
+    source: 'rf2_file' as const,
+  }));
+}
+
+/**
  * Gets the display name for a refset (the refset ID itself is a concept)
  */
 export function getRefsetDisplayName(refsetId: string): string {

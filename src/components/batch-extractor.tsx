@@ -3,23 +3,23 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAppMode } from '@/contexts/AppModeContext';
 import { useSettings } from '@/contexts/SettingsContext';
-import { EmisReport, ExpandedCodeSet } from '@/lib/types';
+import { EmisReport } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { Package, Download, FileText, X, Loader2, CheckCircle2, AlertCircle, XCircle, Database } from 'lucide-react';
+import { Package, Download, FileText, X, Loader2, CheckCircle2, AlertCircle, XCircle, Database, RefreshCw } from 'lucide-react';
 import { loadParsedXmlData } from '@/lib/storage';
 import { ExtractionFileList } from '@/components/extraction-file-list';
 import { ExtractionDataModel } from '@/components/extraction-data-model';
-import { prepareValueSetForExpansion } from '@/lib/valueset-expansion';
-import { assembleValueSetData } from '@/lib/batch-assembly';
-import { buildFormattedEclExpression } from '@/lib/ecl-builder';
+import { buildNormalizedTables, ExtractionInstance, NormalizedTables } from '@/lib/batch-assembly';
 import { TranslatedCode, RawValueSetExpansion } from '@/lib/types';
-import { generateValueSetHash, generateValueSetFriendlyName, generateValueSetId } from '@/lib/valueset-utils';
+import { generateValueSetHash } from '@/lib/valueset-utils';
 import { formatTime, formatTimeNatural } from '@/lib/time-utils';
 import { convertToCSV } from '@/lib/csv-utils';
 import { ExtractionDataViewer } from '@/components/extraction-data-viewer';
+import { fetchApi, CancelledError, coerceErrorMessage } from '@/lib/api-client';
+import { expandValueSetClientSide } from '@/lib/client-valueset-expander';
 
 interface ProcessingStatus {
   currentReport: number;
@@ -30,13 +30,59 @@ interface ProcessingStatus {
   message: string;
 }
 
-interface NormalizedTables {
-  reports: any[];
-  valuesets: any[];
-  originalCodes: any[];
-  expandedConcepts: any[];
-  failedCodes: any[];
-  exceptions: any[];
+/** State carried across expansion passes so failed ValueSets can be retried */
+interface ExtractionContext {
+  instances: ExtractionInstance[];
+  hashGroups: Map<string, ExtractionInstance[]>;
+  expandedByHash: Map<string, RawValueSetExpansion>;
+  failedByHash: Map<string, string>;
+  translations: Record<string, TranslatedCode | null>;
+  historical: Record<string, string>;
+  selectedReports: EmisReport[];
+  totalInstanceCount: number;
+  totalReports: number;
+}
+
+/** ValueSets expanded concurrently; each issues its own rate-limited calls */
+const EXPANSION_CONCURRENCY = 3;
+
+function getErrorSuggestions(message: string): string[] {
+  const msg = message.toLowerCase();
+  if (msg.includes('timeout') || msg.includes('408') || msg.includes('504')) {
+    return [
+      'The terminology server may be overloaded - wait a few minutes and try again',
+      'Try selecting fewer reports to process at once',
+      'Large ValueSets with many codes take longer to expand',
+    ];
+  }
+  if (msg.includes('rate limit') || msg.includes('429')) {
+    return [
+      'The server has temporarily blocked requests - wait 1-2 minutes',
+      'Processing will resume automatically if you try again',
+    ];
+  }
+  if (msg.includes('server error') || msg.includes('500') || msg.includes('502') || msg.includes('503')) {
+    return [
+      'The terminology server is experiencing issues',
+      'Try again in a few minutes',
+      'If the problem persists, check server status',
+    ];
+  }
+  if (msg.includes('network') || msg.includes('connect')) {
+    return [
+      'Check your internet connection',
+      'The terminology server may be unreachable',
+      'Try refreshing the page and starting again',
+    ];
+  }
+  if (msg.includes('unexpected') || msg.includes('non-json') || msg.includes('platform error')) {
+    return [
+      'The server returned an invalid response',
+      'This may indicate server maintenance or a configuration issue',
+      'Try again in a few minutes',
+    ];
+  }
+  return [];
 }
 
 export default function BatchExtractor() {
@@ -56,9 +102,11 @@ export default function BatchExtractor() {
   const [totalTime, setTotalTime] = useState<number | null>(null);
   const [isCheckingXml, setIsCheckingXml] = useState(true);
   const [isDataViewerOpen, setIsDataViewerOpen] = useState(false);
+  const [failedCount, setFailedCount] = useState(0);
   const startTimeRef = useRef<number | null>(null);
   const processingStatusRef = useRef<ProcessingStatus | null>(null);
   const selectedReportsRef = useRef<EmisReport[]>([]);
+  const extractionCtxRef = useRef<ExtractionContext | null>(null);
 
   // Load existing parsed data on mount
   useEffect(() => {
@@ -154,8 +202,74 @@ export default function BatchExtractor() {
     return () => clearInterval(interval);
   }, [status]); // Only depend on status, not processingStatus or selectedReports
 
-  const handleExtract = async () => {
-    if (selectedReports.length === 0) return;
+  /**
+   * Expands a set of unique hashes with a small concurrency pool.
+   * Failures are recorded per hash in ctx.failedByHash and never abort the pass.
+   */
+  const runExpansionPass = async (
+    hashes: string[],
+    ctx: ExtractionContext,
+    label: string,
+  ) => {
+    const passStart = Date.now();
+    let completedCount = 0;
+    const queue = [...hashes];
+
+    const updateStatus = () => {
+      const current = Math.min(completedCount + 1, hashes.length);
+      setProcessingStatus({
+        currentReport: current,
+        totalReports: hashes.length,
+        reportName: `${ctx.totalInstanceCount} instances across ${ctx.totalReports} reports`,
+        currentValueSet: current,
+        totalValueSets: hashes.length,
+        message: `${label} ${current} of ${hashes.length}`,
+      });
+    };
+
+    setProgress(0);
+    updateStatus();
+
+    const worker = async () => {
+      while (queue.length > 0) {
+        if (cancellationRef.current) return;
+        const hash = queue.shift()!;
+        const template = ctx.hashGroups.get(hash)![0];
+
+        try {
+          const raw = await expandValueSetClientSide(
+            template.vs,
+            ctx.translations,
+            ctx.historical,
+            { isCancelled: () => cancellationRef.current },
+          );
+          ctx.expandedByHash.set(hash, raw);
+          ctx.failedByHash.delete(hash);
+        } catch (error) {
+          if (error instanceof CancelledError || cancellationRef.current) return;
+          const message = coerceErrorMessage(error);
+          console.error(`ValueSet expansion failed (hash ${hash}):`, error);
+          ctx.failedByHash.set(hash, message);
+        }
+
+        completedCount++;
+        const elapsedSeconds = (Date.now() - passStart) / 1000;
+        const remaining = hashes.length - completedCount;
+        setRemainingTime(remaining > 0 ? Math.max(0, Math.ceil(remaining * (elapsedSeconds / completedCount))) : 0);
+        setProgress(Math.round((completedCount / hashes.length) * 100));
+        updateStatus();
+      }
+    };
+
+    await Promise.all(
+      Array.from({ length: Math.min(EXPANSION_CONCURRENCY, hashes.length) }, () => worker()),
+    );
+  };
+
+  /** Re-runs expansion for failed ValueSets only and rebuilds the tables */
+  const handleRetryFailed = async () => {
+    const ctx = extractionCtxRef.current;
+    if (!ctx || ctx.failedByHash.size === 0 || isExtracting) return;
 
     setIsExtracting(true);
     setContextIsExtracting(true);
@@ -168,111 +282,83 @@ export default function BatchExtractor() {
     startTimeRef.current = now;
     setElapsedTime(0);
     setRemainingTime(null);
-    setTotalTime(null);
 
-    const normalizedData: NormalizedTables = {
-      reports: [],
-      valuesets: [],
-      originalCodes: [],
-      expandedConcepts: [],
-      failedCodes: [],
-      exceptions: [],
-    };
+    try {
+      await runExpansionPass(Array.from(ctx.failedByHash.keys()), ctx, 'Retrying failed ValueSet');
+
+      const tables = buildNormalizedTables(
+        ctx.selectedReports,
+        ctx.instances,
+        ctx.expandedByHash,
+        ctx.failedByHash,
+        ctx.translations,
+        ctx.historical,
+        equivalenceFilter,
+      );
+      setExtractedData(tables);
+      setFailedCount(ctx.failedByHash.size);
+      setProcessingStatus(null);
+      setStatus('completed');
+    } catch (error) {
+      if (!cancellationRef.current && !(error instanceof CancelledError)) {
+        console.error('Retry failed:', error);
+        setStatus('error');
+        setErrorMessage(coerceErrorMessage(error));
+        setProcessingStatus(null);
+      }
+    } finally {
+      setIsExtracting(false);
+      setContextIsExtracting(false);
+      cancellationRef.current = false;
+      setStartTime(null);
+      startTimeRef.current = null;
+      setElapsedTime(0);
+      setRemainingTime(null);
+    }
+  };
+
+  const handleExtract = async () => {
+    if (selectedReports.length === 0) return;
+
+    setIsExtracting(true);
+    setContextIsExtracting(true);
+    cancellationRef.current = false;
+    setStatus('processing');
+    setProgress(0);
+    setErrorMessage('');
+    setFailedCount(0);
+    const now = Date.now();
+    setStartTime(now);
+    startTimeRef.current = now;
+    setElapsedTime(0);
+    setRemainingTime(null);
+    setTotalTime(null);
 
     let extractionCompleted = false;
     try {
       const totalReports = selectedReports.length;
-
-      // Helper: fetch API with retry for transient errors
-      const fetchApi = async (url: string, body: any, maxRetries = 3): Promise<any> => {
-        let lastError: Error | undefined;
-        for (let attempt = 0; attempt <= maxRetries; attempt++) {
-          try {
-            const response = await fetch(url, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(body),
-            });
-            const text = await response.text();
-            if (!text.trim().startsWith('{') && !text.trim().startsWith('[')) {
-              if (response.status === 504 || response.status === 408) {
-                throw new Error(`Request timeout (${response.status}). The terminology server may be overloaded.`);
-              } else if (response.status === 429) {
-                throw new Error('Rate limited by server. Please wait and try again.');
-              } else if (response.status >= 500) {
-                throw new Error(`Server error (${response.status}).`);
-              }
-              throw new Error(`Unexpected response (${response.status}).`);
-            }
-            const data = JSON.parse(text);
-            if (!response.ok || !data.success) {
-              throw new Error(data.error || `API error: ${response.status}`);
-            }
-            return data;
-          } catch (error) {
-            lastError = error as Error;
-            const msg = lastError.message || '';
-            const isRetryable = msg.includes('504') || msg.includes('502') || msg.includes('503')
-              || msg.includes('timeout') || msg.includes('429') || msg.includes('overloaded');
-            if (isRetryable && attempt < maxRetries) {
-              const delay = Math.min(2000 * Math.pow(2, attempt) + Math.random() * 1000, 30000);
-              console.log(`Retry ${attempt + 1}/${maxRetries} after ${Math.round(delay)}ms: ${msg.substring(0, 80)}`);
-              await new Promise(resolve => setTimeout(resolve, delay));
-              continue;
-            }
-            throw error;
-          }
-        }
-        throw lastError || new Error('Max retries exceeded');
-      };
+      const isCancelled = () => cancellationRef.current;
 
       // === Phase 1: Collect all ValueSets with their hashes ===
-      interface ValueSetInstance {
-        report: EmisReport;
-        reportIndex: number;
-        vsIndex: number;
-        vs: any;
-        hash: string;
-        codes: string[];
-      }
+      const allInstances: ExtractionInstance[] = [];
 
-      const allInstances: ValueSetInstance[] = [];
-
-      for (let reportIndex = 0; reportIndex < selectedReports.length; reportIndex++) {
-        const report = selectedReports[reportIndex];
-
-        normalizedData.reports.push({
-          report_id: report.id,
-          report_xml_id: report.xmlId,
-          report_name: report.name,
-          search_name: report.searchName,
-          description: report.description || '',
-          parent_type: report.parentType || '',
-          parent_report_id: report.parentReportId || '',
-          folder_path: report.rule,
-          xml_file_name: report.rule.split(' > ')[0] || 'unknown.xml',
-          equivalence_filter_setting: equivalenceFilter,
-          parsed_at: new Date().toISOString(),
-        });
-
+      for (const report of selectedReports) {
         // Deduplicate ValueSets within report by code content (matching explore mode logic)
-        const reportCodeHashToIndex = new Map<string, number>();
+        const reportCodeKeys = new Set<string>();
         let reportVsCounter = 0;
         for (const vs of report.valueSets) {
           const codes = vs.values.map((v: any) => v.code).sort();
           const codeKey = codes.join(',');
-          const hash = generateValueSetHash(codes);
 
-          if (reportCodeHashToIndex.has(codeKey)) continue; // skip duplicate within report
-          const vsIndex = reportVsCounter++;
-          reportCodeHashToIndex.set(codeKey, vsIndex);
+          if (reportCodeKeys.has(codeKey)) continue; // skip duplicate within report
+          reportCodeKeys.add(codeKey);
 
-          allInstances.push({ report, reportIndex, vsIndex, vs, hash, codes });
+          allInstances.push({ report, vsIndex: reportVsCounter++, vs, hash: generateValueSetHash(codes) });
         }
       }
 
       // Group by hash — only expand unique hashes
-      const hashGroups = new Map<string, ValueSetInstance[]>();
+      const hashGroups = new Map<string, ExtractionInstance[]>();
       for (const instance of allInstances) {
         if (!hashGroups.has(instance.hash)) {
           hashGroups.set(instance.hash, []);
@@ -324,10 +410,11 @@ export default function BatchExtractor() {
           message: `Translating codes (batch ${chunkIndex}/${translateChunkCount}, ${Math.min(i + TRANSLATE_CHUNK_SIZE, allCodesArray.length)}/${allCodesArray.length})...`,
         });
 
-        const translateData = await fetchApi('/api/terminology/translate', {
-          codes: chunk,
-          equivalenceFilter,
-        });
+        const translateData = await fetchApi<{ translations?: Record<string, TranslatedCode | null> }>(
+          '/api/terminology/translate',
+          { codes: chunk, equivalenceFilter },
+          { isCancelled },
+        );
         Object.assign(globalTranslations, translateData.translations || {});
       }
 
@@ -371,9 +458,11 @@ export default function BatchExtractor() {
           message: `Resolving historical concepts (batch ${chunkIndex}/${resolveChunkCount}, ${Math.min(i + RESOLVE_CHUNK_SIZE, resolveArray.length)}/${resolveArray.length})...`,
         });
 
-        const resolveData = await fetchApi('/api/terminology/resolve-historical', {
-          conceptIds: chunk,
-        });
+        const resolveData = await fetchApi<{ resolutions?: Record<string, { currentConceptId: string; isHistorical: boolean }> }>(
+          '/api/terminology/resolve-historical',
+          { conceptIds: chunk },
+          { isCancelled },
+        );
 
         for (const [conceptId, resolution] of Object.entries(resolveData.resolutions || {})) {
           const res = resolution as { currentConceptId: string; isHistorical: boolean };
@@ -390,208 +479,61 @@ export default function BatchExtractor() {
         return;
       }
 
-      // === Phase 4: Per-ValueSet expansion with pre-computed maps (sequential, 10ms delay) ===
-      const REQUEST_DELAY_MS = 10;
-      const expandedByHash = new Map<string, RawValueSetExpansion>();
-      let completedCount = 0;
+      // === Phase 4: Per-ValueSet expansion (client-driven, bounded server calls) ===
+      const ctx: ExtractionContext = {
+        instances: allInstances,
+        hashGroups,
+        expandedByHash: new Map<string, RawValueSetExpansion>(),
+        failedByHash: new Map<string, string>(),
+        translations: globalTranslations,
+        historical: globalHistorical,
+        selectedReports: [...selectedReports],
+        totalInstanceCount,
+        totalReports,
+      };
+      extractionCtxRef.current = ctx;
 
-      for (const hash of uniqueHashes) {
+      await runExpansionPass(uniqueHashes, ctx, 'Expanding ValueSet');
+      if (cancellationRef.current) {
+        setStatus('idle'); setProcessingStatus(null);
+        setIsExtracting(false); setContextIsExtracting(false);
+        return;
+      }
+
+      // One automatic retry pass — transient platform errors usually clear
+      if (ctx.failedByHash.size > 0) {
+        console.warn(`Retrying ${ctx.failedByHash.size} failed ValueSet(s)...`);
+        await runExpansionPass(Array.from(ctx.failedByHash.keys()), ctx, 'Retrying failed ValueSet');
         if (cancellationRef.current) {
           setStatus('idle'); setProcessingStatus(null);
           setIsExtracting(false); setContextIsExtracting(false);
           return;
         }
-
-        setProcessingStatus({
-          currentReport: completedCount + 1,
-          totalReports: totalUniqueValueSets,
-          reportName: `${totalInstanceCount} instances across ${totalReports} reports`,
-          currentValueSet: completedCount + 1,
-          totalValueSets: totalUniqueValueSets,
-          message: `Expanding ValueSet ${completedCount + 1} of ${totalUniqueValueSets}`,
-        });
-
-        const template = hashGroups.get(hash)![0];
-        const prepared = prepareValueSetForExpansion(template.vs, 0);
-
-        try {
-          const data = await fetchApi('/api/terminology/expand', {
-            featureId: template.report.id,
-            featureName: template.report.name,
-            ...prepared,
-            equivalenceFilter,
-            preComputedTranslations: globalTranslations,
-            preComputedHistorical: globalHistorical,
-            rawMode: true,
-          });
-
-          // In rawMode, valueSetGroups[0] contains the RawValueSetExpansion
-          const raw: RawValueSetExpansion = data.data?.valueSetGroups?.[0] || {
-            concepts: data.data?.concepts || [],
-            parentCodes: [],
-            rf2RefsetIds: [],
-            successfulSctConstCodes: [],
-            sctConstNoProducts: {},
-          };
-          expandedByHash.set(hash, raw);
-        } catch (error) {
-          const msg = (error as Error).message || '';
-          const is404 = msg.includes('404') && !msg.includes('timeout');
-          if (is404) {
-            console.warn(`ValueSet hash ${hash} returned 404, continuing...`);
-            expandedByHash.set(hash, {
-              concepts: [], parentCodes: [],
-              rf2RefsetIds: [], successfulSctConstCodes: [],
-              sctConstNoProducts: {},
-            });
-          } else {
-            throw error;
-          }
-        }
-
-        completedCount += 1;
-
-        if (startTimeRef.current && completedCount > 0) {
-          const elapsedSeconds = (Date.now() - startTimeRef.current) / 1000;
-          const avgTimePerHash = elapsedSeconds / completedCount;
-          const remainingHashes = totalUniqueValueSets - completedCount;
-          setRemainingTime(remainingHashes > 0 ? Math.max(0, Math.ceil(remainingHashes * avgTimePerHash)) : 0);
-        }
-
-        setProgress(Math.round((completedCount / totalUniqueValueSets) * 100));
-
-        if (completedCount < totalUniqueValueSets) {
-          await new Promise(resolve => setTimeout(resolve, REQUEST_DELAY_MS));
-        }
       }
 
-      // === Phase 5: Client-side assembly ===
-      const expandedAt = new Date().toISOString();
+      // === Phase 5: Client-side assembly (failures recorded in expansion_error) ===
+      const tables = buildNormalizedTables(
+        ctx.selectedReports,
+        ctx.instances,
+        ctx.expandedByHash,
+        ctx.failedByHash,
+        ctx.translations,
+        ctx.historical,
+        equivalenceFilter,
+      );
 
-      for (const instance of allInstances) {
-        const rawExpansion = expandedByHash.get(instance.hash);
-        if (!rawExpansion) continue;
-
-        const prepared = prepareValueSetForExpansion(instance.vs, 0);
-        const codeIndices = prepared.parentCodes.map((_: string, idx: number) => idx);
-
-        // Assemble metadata client-side
-        const assembled = assembleValueSetData(
-          rawExpansion,
-          prepared.parentCodes,
-          codeIndices,
-          prepared.excludedCodes,
-          prepared.excludedDisplayNames,
-          prepared.displayNames,
-          prepared.codeSystems,
-          prepared.includeChildren,
-          prepared.isRefset,
-          globalTranslations,
-          globalHistorical,
-        );
-
-        // Build ECL expression client-side from resolved SNOMED codes
-        const eclValues = prepared.parentCodes.map((code: string, idx: number) => {
-          const translated = globalTranslations[code];
-          const snomedCode = translated?.code || code;
-          const currentCode = globalHistorical[snomedCode] || snomedCode;
-          return {
-            code: currentCode,
-            displayName: prepared.displayNames[idx],
-            includeChildren: prepared.includeChildren[idx],
-            isRefset: prepared.isRefset[idx],
-          };
-        });
-        const resolvedExcludedCodes = prepared.excludedCodes
-          .filter((code: string) => !!globalTranslations[code])
-          .map((code: string) => {
-            const translated = globalTranslations[code]!;
-            return globalHistorical[translated.code] || translated.code;
-          });
-        const eclExpression = buildFormattedEclExpression(eclValues, resolvedExcludedCodes);
-
-        const valueSetId = generateValueSetId(instance.report.id, instance.hash, instance.vsIndex);
-        const friendlyName = generateValueSetFriendlyName(instance.report.name, instance.vsIndex);
-
-        // Valueset row
-        normalizedData.valuesets.push({
-          valueset_id: valueSetId,
-          report_id: instance.report.id,
-          valueset_index: instance.vsIndex,
-          valueset_hash: instance.hash,
-          valueset_friendly_name: friendlyName,
-          code_system: assembled.originalCodes?.[0]?.codeSystem || '',
-          ecl_expression: eclExpression || '',
-          expansion_error: assembled.expansionError || '',
-          expanded_at: expandedAt,
-        });
-
-        // Original codes
-        assembled.originalCodes?.forEach((oc, idx) => {
-          normalizedData.originalCodes.push({
-            original_code_id: `${valueSetId}-oc${idx}`,
-            valueset_id: valueSetId,
-            original_code: oc.originalCode,
-            display_name: oc.displayName,
-            code_system: oc.codeSystem,
-            include_children: oc.includeChildren || false,
-            is_refset: oc.isRefset || false,
-            translated_to_snomed_code: oc.translatedTo || '',
-            translated_to_display: oc.translatedToDisplay || '',
-          });
-        });
-
-        // Expanded concepts
-        const parentCodesSet = new Set(assembled.parentCodes || []);
-        assembled.concepts?.forEach((concept, idx) => {
-          normalizedData.expandedConcepts.push({
-            concept_id: `${valueSetId}-c${idx}`,
-            valueset_id: valueSetId,
-            snomed_code: concept.code,
-            display: concept.display,
-            source: concept.source || 'terminology_server',
-            exclude_children: concept.excludeChildren || false,
-            is_descendant: !parentCodesSet.has(concept.code),
-          });
-        });
-
-        // Failed codes
-        assembled.failedCodes?.forEach((failed, idx) => {
-          normalizedData.failedCodes.push({
-            failed_code_id: `${valueSetId}-failed${idx}`,
-            valueset_id: valueSetId,
-            original_code: failed.originalCode,
-            display_name: failed.displayName,
-            code_system: failed.codeSystem,
-            reason: failed.reason,
-          });
-        });
-
-        // Exceptions
-        assembled.exceptions?.forEach((exception, excIdx) => {
-          normalizedData.exceptions.push({
-            exception_id: `${valueSetId}-exc${excIdx}`,
-            valueset_id: valueSetId,
-            original_excluded_code: exception.originalExcludedCode,
-            original_excluded_display: exception.originalExcludedDisplay || '',
-            translated_to_snomed_code: exception.translatedToSnomedCode || '',
-            included_in_ecl: exception.includedInEcl || false,
-            translation_error: exception.translationError || '',
-          });
-        });
-      }
-
-      setExtractedData(normalizedData);
+      setExtractedData(tables);
+      setFailedCount(ctx.failedByHash.size);
       setProcessingStatus(null);
       const finalTime = startTimeRef.current ? Math.floor((Date.now() - startTimeRef.current) / 1000) : 0;
       setTotalTime(finalTime);
       setStatus('completed');
       extractionCompleted = true;
     } catch (error) {
-      if (!cancellationRef.current) {
+      if (!cancellationRef.current && !(error instanceof CancelledError)) {
         console.error('Batch extraction error:', error);
         setStatus('error');
-        setErrorMessage(error instanceof Error ? error.message : 'An unknown error occurred');
+        setErrorMessage(coerceErrorMessage(error));
         setProcessingStatus(null);
       }
     } finally {
@@ -838,6 +780,28 @@ export default function BatchExtractor() {
                   </p>
                 </div>
               </div>
+              {failedCount > 0 && (
+                <div className="flex items-start gap-3 rounded-md border border-amber-300 bg-amber-50 p-3">
+                  <AlertCircle className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1 text-sm text-amber-900">
+                    <span className="font-medium">
+                      {failedCount} unique ValueSet{failedCount !== 1 ? 's' : ''} failed to expand.
+                    </span>{' '}
+                    Affected rows are included with the reason recorded in the{' '}
+                    <code className="text-xs">expansion_error</code> column of valuesets.csv.
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleRetryFailed}
+                    disabled={isExtracting}
+                    className="flex-shrink-0"
+                  >
+                    <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                    Retry Failed
+                  </Button>
+                </div>
+              )}
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-sm">
                 <div className="bg-white/50 p-2 rounded">
                   <div className="text-xs text-muted-foreground">Reports</div>
@@ -891,57 +855,14 @@ export default function BatchExtractor() {
                   {errorMessage || 'An error occurred while processing the reports. Please try again.'}
                 </p>
                 {/* Show helpful tips based on error type */}
-                {errorMessage && (
+                {errorMessage && getErrorSuggestions(errorMessage).length > 0 && (
                   <div className="bg-muted/50 rounded-md p-3 text-xs space-y-1">
-                    {errorMessage.toLowerCase().includes('timeout') && (
-                      <>
-                        <p className="font-medium">Suggestions:</p>
-                        <ul className="list-disc list-inside text-muted-foreground space-y-0.5">
-                          <li>The terminology server may be overloaded - wait a few minutes and try again</li>
-                          <li>Try selecting fewer reports to process at once</li>
-                          <li>Large ValueSets with many codes take longer to expand</li>
-                        </ul>
-                      </>
-                    )}
-                    {errorMessage.toLowerCase().includes('rate limit') && (
-                      <>
-                        <p className="font-medium">Suggestions:</p>
-                        <ul className="list-disc list-inside text-muted-foreground space-y-0.5">
-                          <li>The server has temporarily blocked requests - wait 1-2 minutes</li>
-                          <li>Processing will resume automatically if you try again</li>
-                        </ul>
-                      </>
-                    )}
-                    {(errorMessage.toLowerCase().includes('server error') || errorMessage.toLowerCase().includes('500')) && (
-                      <>
-                        <p className="font-medium">Suggestions:</p>
-                        <ul className="list-disc list-inside text-muted-foreground space-y-0.5">
-                          <li>The terminology server is experiencing issues</li>
-                          <li>Try again in a few minutes</li>
-                          <li>If the problem persists, check server status</li>
-                        </ul>
-                      </>
-                    )}
-                    {(errorMessage.toLowerCase().includes('network') || errorMessage.toLowerCase().includes('connect')) && (
-                      <>
-                        <p className="font-medium">Suggestions:</p>
-                        <ul className="list-disc list-inside text-muted-foreground space-y-0.5">
-                          <li>Check your internet connection</li>
-                          <li>The terminology server may be unreachable</li>
-                          <li>Try refreshing the page and starting again</li>
-                        </ul>
-                      </>
-                    )}
-                    {errorMessage.toLowerCase().includes('unexpected response') && (
-                      <>
-                        <p className="font-medium">Suggestions:</p>
-                        <ul className="list-disc list-inside text-muted-foreground space-y-0.5">
-                          <li>The server returned an invalid response</li>
-                          <li>This may indicate server maintenance or a configuration issue</li>
-                          <li>Try again in a few minutes</li>
-                        </ul>
-                      </>
-                    )}
+                    <p className="font-medium">Suggestions:</p>
+                    <ul className="list-disc list-inside text-muted-foreground space-y-0.5">
+                      {getErrorSuggestions(errorMessage).map((suggestion) => (
+                        <li key={suggestion}>{suggestion}</li>
+                      ))}
+                    </ul>
                   </div>
                 )}
                 <Button

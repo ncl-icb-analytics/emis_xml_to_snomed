@@ -1,4 +1,5 @@
 import { EmisValueSet, EquivalenceFilter } from './types';
+import { coerceErrorMessage } from './api-client';
 
 /**
  * Prepares a ValueSet for expansion by extracting codes, display names, and metadata
@@ -114,9 +115,9 @@ export async function expandValueSet(
   }
 
   if (!response.ok || !data.success) {
-    // Preserve the error message from the API route
-    const errorMessage = data.error || `API request failed: ${response.status} ${response.statusText}`;
-    throw new Error(errorMessage);
+    // Preserve the error message from the API route; platform errors can
+    // return an object here — coerce so it never renders "[object Object]"
+    throw new Error(coerceErrorMessage(data.error, response.status));
   }
 
   return data;

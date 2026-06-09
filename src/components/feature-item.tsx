@@ -8,6 +8,7 @@ import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import CodeDisplay from './code-display';
 import { Feature, ExpandedCodeSet } from '@/lib/types';
 import { useSettings } from '@/contexts/SettingsContext';
+import { coerceErrorMessage } from '@/lib/api-client';
 
 interface FeatureItemProps {
   feature: Feature;
@@ -101,7 +102,7 @@ export default function FeatureItem({
       }
 
       if (!result.success || !result.data) {
-        throw new Error(result.error || 'Failed to expand codes');
+        throw new Error(result.error ? coerceErrorMessage(result.error) : 'Failed to expand codes');
       }
 
       setExpandedCodes(result.data);

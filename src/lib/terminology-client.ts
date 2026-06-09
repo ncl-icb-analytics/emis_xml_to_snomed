@@ -624,13 +624,21 @@ export async function batchResolveHistorical(
   return results;
 }
 
-export async function expandEclQuery(
-  eclExpression: string
-): Promise<SnomedConcept[]> {
+/**
+ * Expands one page of an ECL query via ValueSet/$expand with count/offset.
+ * Single upstream call (plus retries) — bounded duration and response size,
+ * suitable for serverless invocation.
+ */
+export async function expandEclPage(
+  eclExpression: string,
+  offset: number,
+  count: number,
+  maxRetries: number = 3
+): Promise<{ concepts: SnomedConcept[]; total: number }> {
   // Handle empty ECL expression
   if (!eclExpression || eclExpression.trim() === '') {
     console.warn('Empty ECL expression provided - returning empty result');
-    return [];
+    return { concepts: [], total: 0 };
   }
 
   const token = await getAccessToken();
@@ -641,7 +649,7 @@ export async function expandEclQuery(
 
   // Construct the URL parameter: http://snomed.info/sct?fhir_vs=ecl/{encoded_ecl}
   const urlParam = `http://snomed.info/sct?fhir_vs=ecl/${encodedEcl}`;
-  const fullUrl = `${url}?url=${encodeURIComponent(urlParam)}`;
+  const fullUrl = `${url}?url=${encodeURIComponent(urlParam)}&count=${count}&offset=${offset}`;
 
   // Wrap the fetch in retry logic for transient server errors (502, 503, 504, 429)
   return withRetry(async () => {
@@ -686,7 +694,7 @@ export async function expandEclQuery(
     });
 
     if (errorResult !== null) {
-      return errorResult; // Returns [] for 404
+      return { concepts: [], total: 0 }; // 404 - code not found
     }
 
     // Safely parse JSON with better error handling
@@ -732,17 +740,45 @@ export async function expandEclQuery(
       }
     }
 
-    // Log if we got no concepts but response was OK
-    if (concepts.length === 0 && response.ok) {
-      const codeMatches = eclExpression.match(/\d{6,}/g);
-      console.warn(`⚠️ No concepts returned for ECL query (${codeMatches?.length || 0} codes)`);
-    }
+    // expansion.total is the full match count across all pages
+    const total = typeof data.expansion?.total === 'number' ? data.expansion.total : concepts.length;
 
-    return concepts;
+    return { concepts, total };
   }, {
-    maxRetries: 3,
+    maxRetries,
     baseDelayMs: 2000, // Start with 2s delay for server overload
     maxDelayMs: 30000,
     context: 'ECL expansion'
   });
+}
+
+/**
+ * Expands a full ECL query, paging through ValueSet/$expand results.
+ * Previously a single un-paged call — large expansions could be silently
+ * truncated at the server's page-size cap.
+ */
+export async function expandEclQuery(
+  eclExpression: string
+): Promise<SnomedConcept[]> {
+  const PAGE_SIZE = 10000;
+  const MAX_PAGES = 50; // Safety cap (500k concepts) against servers that ignore offset
+
+  const all: SnomedConcept[] = [];
+  let offset = 0;
+
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const { concepts, total } = await expandEclPage(eclExpression, offset, PAGE_SIZE);
+    all.push(...concepts);
+    offset += concepts.length;
+
+    if (concepts.length < PAGE_SIZE) break;
+    if (total >= 0 && all.length >= total) break;
+  }
+
+  if (all.length === 0) {
+    const codeMatches = eclExpression.match(/\d{6,}/g);
+    console.warn(`⚠️ No concepts returned for ECL query (${codeMatches?.length || 0} codes)`);
+  }
+
+  return all;
 }

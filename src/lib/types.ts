@@ -320,11 +320,6 @@ export interface ExpandCodesRequest {
   codeSystems?: string[];
   valueSetMapping?: ValueSetMapping[];
   equivalenceFilter?: EquivalenceFilter;
-  // Pre-computed maps for batch mode — skips translation/resolution server-side
-  preComputedTranslations?: Record<string, TranslatedCode | null>;
-  preComputedHistorical?: Record<string, string>;
-  // Returns lighter response without metadata assembly
-  rawMode?: boolean;
 }
 
 // === Batch Translation/Resolution API Types ===
@@ -347,6 +342,31 @@ export interface ResolveHistoricalRequest {
 export interface ResolveHistoricalResponse {
   success: boolean;
   resolutions?: Record<string, { currentConceptId: string; isHistorical: boolean; display?: string }>;
+  error?: string;
+}
+
+export interface EclExpandRequest {
+  ecl: string;
+  offset?: number;
+  count?: number;
+}
+
+export interface EclExpandResponse {
+  success: boolean;
+  concepts?: SnomedConcept[];
+  total?: number;
+  offset?: number;
+  error?: string;
+}
+
+export interface Rf2RefsetRequest {
+  refsetIds: string[];
+}
+
+export interface Rf2RefsetResponse {
+  success: boolean;
+  /** Only refsets found in RF2 are present */
+  refsets?: Record<string, { members: { code: string; display: string }[]; displayName: string }>;
   error?: string;
 }
 
