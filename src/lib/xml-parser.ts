@@ -22,19 +22,6 @@ const parserOptions = {
   allowBooleanAttributes: true,
 };
 
-const IGNORED_VALUES = [
-  'ACTIVE',
-  'REVIEW',
-  'ENDED',
-  'N/A',
-  '385432009',
-  'C',
-  'U',
-  'R',
-  'RD',
-  'None',
-];
-
 export async function parseEmisXml(
   xmlContent: string
 ): Promise<EmisXmlDocument> {
@@ -176,9 +163,11 @@ export async function parseEmisXml(
         }
       }
 
+      // Exclusion-style filter sets (<allValues>) are rule semantics, not code
+      // lists — keep them out of the report's extractable ValueSets
       const valueSets = valueSetsData
         .map((vs, vsIndex) => parseValueSet(vs, vsIndex))
-        .filter((vs) => vs.values.length > 0);
+        .filter((vs) => vs.values.length > 0 && !vs.isAllValuesExcept);
 
       // Parse rule structure
       const parsedCriteriaGroups = population ? parseCriteriaGroups(population) : undefined;
@@ -324,7 +313,17 @@ export function parseValueSet(valueSet: any, index: number): EmisValueSet {
   // In EMIS XML, valueSet contains 'values' (plural) elements
   // Each value element has: <value>, <displayName>, <includeChildren>, <isRefset>
   const valuesData = valueSet.values || [];
-  const valuesArray = Array.isArray(valuesData) ? valuesData : valuesData ? [valuesData] : [];
+  let valuesArray = Array.isArray(valuesData) ? valuesData : valuesData ? [valuesData] : [];
+
+  // <allValues> inverts the set: the filter matches every value EXCEPT those
+  // listed inside it (e.g. Episode excluding Review/Ended). Parse the nested
+  // values and flag the set so downstream rendering negates it.
+  let isAllValuesExcept = false;
+  if (valuesArray.length === 0 && valueSet.allValues?.values) {
+    const allValuesData = valueSet.allValues.values;
+    valuesArray = Array.isArray(allValuesData) ? allValuesData : [allValuesData];
+    isAllValuesExcept = true;
+  }
 
   // Collect all exceptions from:
   // 1. ValueSet-level exceptions (valueSet.exception.values)
@@ -421,6 +420,7 @@ export function parseValueSet(valueSet: any, index: number): EmisValueSet {
         displayName: e.displayName,
       }))
       .filter((e) => e.code),
+    ...(isAllValuesExcept ? { isAllValuesExcept } : {}),
   };
 }
 
@@ -459,8 +459,11 @@ function parseValue(value: any): EmisValue | null {
   const isRefsetPattern = code.startsWith('999') && code.length >= 15;
   const isRefset = isRefsetFlag || isRefsetPattern;
 
-  // Filter out ignored values
-  if (!code || IGNORED_VALUES.includes(code)) {
+  // Keep every value — EMISINTERNAL enums (REVIEW, ENDED, R, C, ...) carry
+  // rule semantics (episode/status/prescription-type filters). Dropping them
+  // here silently removed those filters from rules, guides, and extraction.
+  // Non-SNOMED values are excluded later at ECL/expansion time instead.
+  if (!code) {
     return null;
   }
 

@@ -27,6 +27,11 @@ export interface EmisValueSet {
   description?: string; // XML description — often a cluster ID like STAT_COD
   values: EmisValue[];
   exceptions: EmisException[];
+  /**
+   * True when the XML used <allValues>: the filter matches every value
+   * EXCEPT those listed in `values` (e.g. episode excluding Review/Ended).
+   */
+  isAllValuesExcept?: boolean;
 }
 
 export interface EmisValue {

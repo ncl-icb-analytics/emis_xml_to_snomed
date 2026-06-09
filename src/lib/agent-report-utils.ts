@@ -21,6 +21,8 @@ export interface ValueSetSummary {
   codeSystem: string;
   cluster: string | null;
   exceptionCount: number;
+  /** True when the filter matches every value EXCEPT the listed ones */
+  isAllValuesExcept: boolean;
   codes: Array<{
     code: string;
     displayName: string;
@@ -121,8 +123,10 @@ export interface RuleDecisionSummary {
   operator: string | null;
   passAction: string;
   failAction: string;
-  clauseType: 'must-match' | 'must-not-match' | 'include-if-match' | 'include-if-match-else-next' | 'include-if-not-match' | 'informational';
+  clauseType: 'must-match' | 'must-not-match' | 'include-if-match' | 'include-if-match-else-next' | 'include-if-not-match' | 'include-if-not-match-else-next' | 'informational';
   clauseText: string;
+  /** Clause text without the clause-type prefix */
+  clauseTextRaw: string;
   criteria: string[];
   criteriaDetails: CriterionLogicSummary[];
   populationCriteria: Array<{ xmlId: string; searchName: string }>;
@@ -301,10 +305,13 @@ export function getCriterionDisplayData(criterion: SearchCriterion): CriterionDi
       if (isDrugFilter) {
         continue;
       }
-      const vsNames = cf.valueSets.flatMap((vs) => vs.values.map((v) => v.displayName)).filter(Boolean);
+      const vsNames = cf.valueSets.flatMap((vs) => vs.values.map((v) => v.displayName || v.code)).filter(Boolean);
       if (vsNames.length > 0) {
         const cleanLabel = name.replace(/\s*\(.*\)\s*$/, '').trim();
-        filters.push({ label: `${cleanLabel} =`, value: vsNames.join(', ') });
+        // <allValues> sets are exclusions; NOT IN inverts too
+        const allExcept = cf.valueSets.every((vs) => vs.isAllValuesExcept);
+        const negated = (op === 'NOTIN') !== allExcept;
+        filters.push({ label: `${cleanLabel} ${negated ? '≠' : '='}`, value: vsNames.join(', ') });
         continue;
       }
     }
@@ -418,6 +425,7 @@ function buildValueSetSummary(vs: EmisValueSet, friendlyNameMap: Map<string, str
     codeSystem: codeSystemLabel(vs.codeSystem),
     cluster: vs.description || null,
     exceptionCount: vs.exceptions.length,
+    isAllValuesExcept: Boolean(vs.isAllValuesExcept),
     codes: vs.values.map((value) => ({
       code: value.code,
       displayName: value.displayName,
@@ -781,6 +789,9 @@ function getClauseType(passAction: string, failAction: string): RuleDecisionSumm
   // OR-cascade: matching patients are included and stop; others try the next rule
   if (passAction === 'Include' && failAction === 'Next rule') return 'include-if-match-else-next';
   if (passAction === 'Exclude' && failAction === 'Include') return 'include-if-not-match';
+  // "If Rule Failed: Include in final result" — failing patients are included
+  // and stop; matching patients try the next rule (therapy-gap chains)
+  if (passAction === 'Next rule' && failAction === 'Include') return 'include-if-not-match-else-next';
   return 'informational';
 }
 
@@ -796,6 +807,8 @@ function clauseTextForType(clauseType: RuleDecisionSummary['clauseType'], clause
       return `Included if matches (otherwise next rule): ${clauseText}`;
     case 'include-if-not-match':
       return `Included if it does not match: ${clauseText}`;
+    case 'include-if-not-match-else-next':
+      return `Included if it does not match (otherwise next rule): ${clauseText}`;
     default:
       return clauseText;
   }
@@ -823,6 +836,7 @@ function buildDecisionFlow(report: EmisReport, allReports: EmisReport[]): RuleDe
       failAction,
       clauseType,
       clauseText: clauseTextForType(clauseType, clauseText),
+      clauseTextRaw: clauseText,
       criteria: group.criteria.map((criterion) => buildCriterionPhrase(criterion)),
       criteriaDetails: group.criteria.map((criterion) => buildCriterionLogicSummary(criterion, friendlyNameMap)),
       populationCriteria: group.populationCriteria.map((pc) => {
@@ -846,6 +860,7 @@ function buildDecisionFlow(report: EmisReport, allReports: EmisReport[]): RuleDe
       failAction: 'Informational',
       clauseType: 'informational',
       clauseText,
+      clauseTextRaw: clauseText,
       criteria: group.criteria.map((criterion) => buildCriterionPhrase(criterion)),
       criteriaDetails: group.criteria.map((criterion) => buildCriterionLogicSummary(criterion, friendlyNameMap)),
       populationCriteria: [],
@@ -893,31 +908,45 @@ function buildDependencies(report: EmisReport, allReports: EmisReport[]): Report
   };
 }
 
+/**
+ * Builds an exact boolean expression for a sequential EMIS rule chain.
+ * Each rule routes to Include, Exclude, or the next rule, so inclusion from
+ * rule i onward is defined recursively from the last rule backwards.
+ */
+function buildExactBooleanLogic(criteriaDecisions: RuleDecisionSummary[]): string | null {
+  const build = (idx: number): string | null => {
+    if (idx >= criteriaDecisions.length) return null; // fall-through (no decisive rule)
+    const decision = criteriaDecisions[idx];
+    const atom = `(${decision.clauseTextRaw})`;
+    const rest = build(idx + 1);
+    const { passAction, failAction } = decision;
+
+    if (passAction === 'Include' && failAction === 'Exclude') return atom;
+    if (passAction === 'Exclude' && failAction === 'Include') return `NOT ${atom}`;
+    if (passAction === 'Include' && failAction === 'Next rule') return rest ? `${atom} OR (${rest})` : atom;
+    if (passAction === 'Next rule' && failAction === 'Exclude') return rest ? `${atom} AND (${rest})` : atom;
+    if (passAction === 'Exclude' && failAction === 'Next rule') return rest ? `NOT ${atom} AND (${rest})` : `NOT ${atom}`;
+    if (passAction === 'Next rule' && failAction === 'Include') return rest ? `NOT ${atom} OR (${rest})` : `NOT ${atom}`;
+    return rest; // informational — does not affect inclusion
+  };
+  return build(0);
+}
+
 function buildAgentInterpretation(report: EmisReport, allReports: EmisReport[]) {
   const decisionFlow = buildDecisionFlow(report, allReports);
-  const requiredClauses = decisionFlow
-    .filter((decision) => decision.clauseType === 'must-match')
-    .map((decision) => decision.clauseText.replace(/^Must match:\s*/, ''));
-  const excludedClauses = decisionFlow
-    .filter((decision) => decision.clauseType === 'must-not-match')
-    .map((decision) => decision.clauseText.replace(/^Must not match:\s*/, ''));
-  // OR-cascade rules plus a final include-if-match form one "any of" chain
-  const anyOfClauses = decisionFlow
-    .filter((decision) => decision.clauseType === 'include-if-match-else-next' || decision.clauseType === 'include-if-match')
-    .map((decision) => decision.clauseText.replace(/^Included if matches( \(otherwise next rule\))?:\s*/, ''));
-  const finalIncludeNotClauses = decisionFlow
-    .filter((decision) => decision.clauseType === 'include-if-not-match')
-    .map((decision) => decision.clauseText.replace(/^Included if it does not match:\s*/, ''));
+  const criteriaDecisions = decisionFlow.filter((decision) => decision.kind === 'criteria-group');
 
-  const booleanLogicParts: string[] = [];
-  for (const clause of requiredClauses) booleanLogicParts.push(`(${clause})`);
-  for (const clause of excludedClauses) booleanLogicParts.push(`NOT (${clause})`);
-  if (anyOfClauses.length === 1) {
-    booleanLogicParts.push(`(${anyOfClauses[0]})`);
-  } else if (anyOfClauses.length > 1) {
-    booleanLogicParts.push(`(${anyOfClauses.map((clause) => `(${clause})`).join(' OR ')})`);
-  }
-  for (const clause of finalIncludeNotClauses) booleanLogicParts.push(`NOT (${clause})`);
+  const clausesOf = (...types: Array<RuleDecisionSummary['clauseType']>) =>
+    criteriaDecisions
+      .filter((decision) => types.includes(decision.clauseType))
+      .map((decision) => decision.clauseTextRaw);
+
+  const requiredClauses = clausesOf('must-match');
+  const excludedClauses = clausesOf('must-not-match');
+  // OR-cascade rules plus a final include-if-match form one "any of" chain
+  const anyOfClauses = clausesOf('include-if-match-else-next', 'include-if-match');
+  // NOT-cascade: a patient is included when they fail any one of these
+  const notAllClauses = clausesOf('include-if-not-match-else-next', 'include-if-not-match');
 
   const summaryParts = [
     `Start with ${describeStartingPopulation(report, allReports)}.`,
@@ -933,8 +962,10 @@ function buildAgentInterpretation(report: EmisReport, allReports: EmisReport[]) 
   } else if (anyOfClauses.length > 1) {
     summaryParts.push(`Include patients who match any of: ${anyOfClauses.map((clause) => toSentenceCase(clause)).join('; OR ')}.`);
   }
-  if (finalIncludeNotClauses.length > 0) {
-    summaryParts.push(`Finally include patients who do not match ${finalIncludeNotClauses.map((clause) => toSentenceCase(clause)).join('; ')}.`);
+  if (notAllClauses.length === 1) {
+    summaryParts.push(`Include patients who do not match ${toSentenceCase(notAllClauses[0])}.`);
+  } else if (notAllClauses.length > 1) {
+    summaryParts.push(`Include patients who fail to match any one of: ${notAllClauses.map((clause) => toSentenceCase(clause)).join('; ')}. (Only patients matching all of these miss this inclusion route.)`);
   }
 
   return {
@@ -942,7 +973,7 @@ function buildAgentInterpretation(report: EmisReport, allReports: EmisReport[]) 
     dependencies: buildDependencies(report, allReports),
     inclusionCriteria: [...requiredClauses, ...anyOfClauses],
     exclusionCriteria: excludedClauses,
-    booleanLogic: booleanLogicParts.join(' AND ') || null,
+    booleanLogic: buildExactBooleanLogic(criteriaDecisions),
     plainEnglishSummary: summaryParts.join(' '),
   };
 }
@@ -1042,16 +1073,46 @@ const UNIT_WORDS: Record<string, string> = {
   FISCALYEAR: 'fiscal year',
 };
 
+function isEnumValueSet(vs: ValueSetSummary): boolean {
+  return vs.codeSystem === 'Internal';
+}
+
+function filterLabel(filter: CriterionFilterSummary): string {
+  const column = (filter.columns[0] || '').toUpperCase();
+  if (COLUMN_LABELS[column]) return COLUMN_LABELS[column];
+  // Prefer the XML display name ("Date Drug Added") over a raw column fallback,
+  // dropping any parenthetical hint ("Episode (First, New...)" -> "episode")
+  if (filter.displayName) return filter.displayName.replace(/\s*\(.*\)\s*$/, '').toLowerCase();
+  return columnLabel(column);
+}
+
+/** "REVIEW" → "Review"; short codes like "RD" stay as-is */
+function prettifyEnumValue(code: string): string {
+  if (code.length <= 2 || !/^[A-Z]+$/.test(code)) return code;
+  return code.charAt(0) + code.slice(1).toLowerCase();
+}
+
 /** "Date IN within the last 1 year" → "date within the last 1 year" */
 function humanFilter(filter: CriterionFilterSummary): string {
-  const label = columnLabel(filter.columns[0] || '') || (filter.displayName || '').toLowerCase();
+  const label = filterLabel(filter);
+  const notIn = filter.operator?.toUpperCase() === 'NOTIN';
   if (filter.valueSets.length > 0) {
-    return `${label} in ${filter.valueSets.map(describeValueSetRef).join(', ')}`;
+    // <allValues> sets are exclusions — they invert the operator
+    const allExcept = filter.valueSets.every((vs) => vs.isAllValuesExcept);
+    const negated = notIn !== allExcept;
+    // Enum filters (episode type, prescription type, status...) read better
+    // inline than as a code-list reference: "episode is not Review or Ended"
+    if (filter.valueSets.every(isEnumValueSet)) {
+      const values = filter.valueSets
+        .flatMap((vs) => vs.codes.map((code) => code.displayName || prettifyEnumValue(code.code)))
+        .join(' or ');
+      return `${label} is ${negated ? 'not ' : ''}${values}`;
+    }
+    return `${label} ${negated ? 'not ' : ''}in ${filter.valueSets.map(describeValueSetRef).join(', ')}`;
   }
   const value = filter.range?.rendered || filter.singleValue || '';
   if (!value) return label;
-  const negated = filter.operator?.toUpperCase() === 'NOTIN' ? 'not ' : '';
-  return `${label} ${negated}${humanizeRawTemporal(value)}`.trim();
+  return `${label} ${notIn ? 'not ' : ''}${humanizeRawTemporal(value)}`.trim();
 }
 
 /** "Earliest 1 where SNOMED code IN: COPD_COD" → "keep only the earliest matching record, and require its code to be in: COPD_COD" */
@@ -1093,19 +1154,22 @@ function addHumanCriterion(lines: string[], criterion: CriterionLogicSummary, in
   const tableSuffix = criterion.displayName.toLowerCase() === label ? '' : ` (${label})`;
   lines.push(`${indent}- **${criterion.displayName}**${tableSuffix}${negation}`);
 
-  const allValueSets = [...criterion.valueSets, ...criterion.extraValueSets];
+  // Enum sets (episode/status/prescription-type values) are rendered inline by
+  // their filter, not as code lists
+  const allValueSets = [...criterion.valueSets, ...criterion.extraValueSets].filter((vs) => !isEnumValueSet(vs));
   if (allValueSets.length > 0) {
     lines.push(`${indent}  - Code in: ${allValueSets.map(describeValueSetRef).join(', or ')}`);
   }
   for (const filter of criterion.filters) {
-    // Skip code filters already covered by the ValueSets line
-    if (filter.columns[0]?.toUpperCase() === 'READCODE' && filter.valueSets.length > 0) {
+    // Skip code/drug filters already covered by the ValueSets line
+    const filterColumn = filter.columns[0]?.toUpperCase();
+    if ((filterColumn === 'READCODE' || filterColumn === 'DRUGCODE') && filter.valueSets.length > 0) {
       const covered = filter.valueSets.every((vs) => allValueSets.some((avs) => avs.friendlyName === vs.friendlyName));
       if (covered) continue;
     }
     // Skip filters that carry no condition (operator-only boundaries render empty)
     const rendered = humanFilter(filter);
-    if (!rendered || rendered === columnLabel(filter.columns[0] || '')) continue;
+    if (!rendered || rendered === filterLabel(filter)) continue;
     lines.push(`${indent}  - Where ${rendered}`);
   }
   for (const restriction of criterion.restrictions) {
@@ -1133,6 +1197,8 @@ function ruleFlowSentence(
       return `Patients **must match** this rule to stay in. Those who match continue to ${next}; those who do not are excluded.`;
     case 'must-not-match':
       return `Patients matching this rule are **excluded** and no further rules are checked. Everyone else continues to ${next}.`;
+    case 'include-if-not-match-else-next':
+      return `If a patient does **not** match this rule they are **included** and no further rules are checked. If they do match, continue to ${next}.`;
     case 'include-if-match':
       return 'Final rule: patients who match are **included**; everyone else is excluded.';
     case 'include-if-not-match':
@@ -1148,6 +1214,7 @@ function collectReferencedValueSets(report: EmisReport): ValueSetSummary[] {
   const byName = new Map<string, ValueSetSummary>();
 
   const addVs = (vs: EmisValueSet) => {
+    if (vs.isAllValuesExcept) return; // exclusion filters are not code lists
     const summary = buildValueSetSummary(vs, friendlyNameMap);
     if (!byName.has(summary.friendlyName)) {
       byName.set(summary.friendlyName, summary);
@@ -1208,7 +1275,7 @@ export function buildImplementationGuideMarkdown(report: EmisReport, allReports:
   const mustNumbers = ruleNumbersOf('must-match');
   const excludeNumbers = ruleNumbersOf('must-not-match');
   const anyOfNumbers = [...ruleNumbersOf('include-if-match-else-next'), ...ruleNumbersOf('include-if-match')].sort((a, b) => a - b);
-  const includeNotNumbers = ruleNumbersOf('include-if-not-match');
+  const notAllNumbers = [...ruleNumbersOf('include-if-not-match-else-next'), ...ruleNumbersOf('include-if-not-match')].sort((a, b) => a - b);
 
   const listRules = (numbers: number[]) => {
     if (numbers.length === 1) return `Rule ${numbers[0]}`;
@@ -1232,7 +1299,9 @@ export function buildImplementationGuideMarkdown(report: EmisReport, allReports:
   if (excludeNumbers.length > 0) overview.push(`Patients matching ${listRules(excludeNumbers)} are excluded.`);
   if (anyOfNumbers.length === 1) overview.push(`A patient is included when they match ${listRules(anyOfNumbers)}.`);
   if (anyOfNumbers.length > 1) overview.push(`A patient is included when they match any one of ${listRules(anyOfNumbers)}.`);
-  if (includeNotNumbers.length > 0) overview.push(`${listRules(includeNotNumbers)} includes only patients who do NOT match it.`);
+  if (notAllNumbers.length === 1) overview.push(`A patient is included when they do NOT match ${listRules(notAllNumbers)}.`);
+  if (notAllNumbers.length > 1) overview.push(`A patient is included unless they match every one of ${listRules(notAllNumbers)} — failing any one of them includes the patient.`);
+  if (criteriaRules.length > 1) overview.push('Rules run in order; each patient stops at the first rule that includes or excludes them.');
   if (criteriaRules.length === 0) overview.push('This report has no filtering rules of its own — it reports on its starting population.');
   lines.push(overview.join(' '));
   lines.push('');

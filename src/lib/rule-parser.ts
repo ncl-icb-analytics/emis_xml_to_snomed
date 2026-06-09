@@ -213,7 +213,9 @@ function parseValueSetsFromFilterAttrs(filterAttrs: any[]): EmisValueSet[] {
 
 function addValueSet(vsNode: any, out: EmisValueSet[], seen: Set<string>) {
   const parsed = parseValueSet(vsNode, out.length);
-  if (parsed && parsed.values.length > 0) {
+  // Exclusion-style sets (<allValues>) stay on the column filter only —
+  // hoisting them here would list excluded values as if they were code lists
+  if (parsed && parsed.values.length > 0 && !parsed.isAllValuesExcept) {
     // Deduplicate by id
     if (!seen.has(parsed.id)) {
       seen.add(parsed.id);
