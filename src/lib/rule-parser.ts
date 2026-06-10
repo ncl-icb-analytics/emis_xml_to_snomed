@@ -134,18 +134,29 @@ function parseCriterion(node: any): SearchCriterion | null {
   // Value sets from filterAttribute > columnValue > valueSet
   const valueSets = parseValueSetsFromFilterAttrs(filterAttrs);
 
-  // Also parse value sets from baseCriteriaGroup nested structures
+  // Parse baseCriteriaGroup structurally: the nested criteria carry their own
+  // negation, operators, filters, restrictions, and linked criteria. The
+  // value sets are also hoisted into this criterion (existing behaviour, which
+  // friendly-name numbering depends on).
   const baseGroups = toArray(node.baseCriteriaGroup);
+  const baseCriteriaGroups: NonNullable<SearchCriterion['baseCriteriaGroups']> = [];
   for (const bg of baseGroups) {
     const bgDef = bg?.definition;
     if (!bgDef) continue;
+    const memberOperator = (extractText(bgDef.memberOperator) || 'AND') as MemberOperator;
+    const nestedCriteria: SearchCriterion[] = [];
     const bgCriteriaContainers = toArray(bgDef.criteria);
     for (const container of bgCriteriaContainers) {
       const bgCritNodes = toArray(container?.criterion);
       for (const bgCrit of bgCritNodes) {
         const bgFilterAttrs = toArray(bgCrit?.filterAttribute);
         valueSets.push(...parseValueSetsFromFilterAttrs(bgFilterAttrs));
+        const parsed = parseCriterion(bgCrit);
+        if (parsed) nestedCriteria.push(parsed);
       }
+    }
+    if (nestedCriteria.length > 0) {
+      baseCriteriaGroups.push({ memberOperator, criteria: nestedCriteria });
     }
   }
 
@@ -169,6 +180,7 @@ function parseCriterion(node: any): SearchCriterion | null {
     restrictions,
     exceptionCode,
     linkedCriteria,
+    ...(baseCriteriaGroups.length > 0 ? { baseCriteriaGroups } : {}),
   };
 }
 
@@ -292,6 +304,18 @@ function parseColumnFilter(cvNode: any): ColumnFilter | null {
     if (parsed.length > 0) filterValueSets = parsed;
   }
 
+  // Runtime parameter — value prompted when the search runs
+  let parameter: { name: string; allowGlobal: boolean } | undefined;
+  if (cvNode.parameter) {
+    const paramName = extractText(cvNode.parameter.name);
+    if (paramName) {
+      parameter = {
+        name: paramName,
+        allowGlobal: extractText(cvNode.parameter.allowGlobal) === 'true',
+      };
+    }
+  }
+
   return {
     id: cvNode['@_id'] || cvNode.id || undefined,
     columns,
@@ -300,6 +324,7 @@ function parseColumnFilter(cvNode: any): ColumnFilter | null {
     range,
     singleValue,
     valueSets: filterValueSets,
+    parameter,
   };
 }
 

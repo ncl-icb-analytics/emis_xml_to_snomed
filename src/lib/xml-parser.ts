@@ -236,20 +236,39 @@ function extractValueSetsFromCriterion(criterion: any, valueSetsData: any[]): vo
 
   // Recursively process linkedCriterion structures
   if (criterion.linkedCriterion) {
-    const linkedCriteria = Array.isArray(criterion.linkedCriterion) 
-      ? criterion.linkedCriterion 
+    const linkedCriteria = Array.isArray(criterion.linkedCriterion)
+      ? criterion.linkedCriterion
       : [criterion.linkedCriterion];
-    
+
     linkedCriteria.forEach((linkedCrit: any) => {
       if (linkedCrit?.criterion) {
-        const linkedCriterionArray = Array.isArray(linkedCrit.criterion) 
-          ? linkedCrit.criterion 
+        const linkedCriterionArray = Array.isArray(linkedCrit.criterion)
+          ? linkedCrit.criterion
           : [linkedCrit.criterion];
-        
+
         linkedCriterionArray.forEach((linkedCriterion: any) => {
           extractValueSetsFromCriterion(linkedCriterion, valueSetsData);
         });
       }
+    });
+  }
+
+  // Recursively process baseCriteriaGroup wrappers — their nested criteria
+  // carry code lists that belong to the extraction
+  if (criterion.baseCriteriaGroup) {
+    const baseGroups = Array.isArray(criterion.baseCriteriaGroup)
+      ? criterion.baseCriteriaGroup
+      : [criterion.baseCriteriaGroup];
+
+    baseGroups.forEach((bg: any) => {
+      const containers = bg?.definition?.criteria;
+      const containerArray = Array.isArray(containers) ? containers : containers ? [containers] : [];
+      containerArray.forEach((container: any) => {
+        const critNodes = Array.isArray(container?.criterion) ? container.criterion : container?.criterion ? [container.criterion] : [];
+        critNodes.forEach((nested: any) => {
+          extractValueSetsFromCriterion(nested, valueSetsData);
+        });
+      });
     });
   }
 }

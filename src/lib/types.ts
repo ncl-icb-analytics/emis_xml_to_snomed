@@ -71,6 +71,8 @@ export interface ColumnFilter {
   range?: DateRange;
   singleValue?: string;
   valueSets?: EmisValueSet[];
+  /** Runtime parameter prompted when the search runs (e.g. MONTH_OF_BIRTH) */
+  parameter?: { name: string; allowGlobal: boolean };
 }
 
 export interface RestrictionCondition {
@@ -106,6 +108,12 @@ export interface SearchCriterion {
   exceptionCode?: string;
   linkedCriteria: SearchCriterion[];
   relationship?: LinkedRelationship;
+  /**
+   * Nested criterion groups (<baseCriteriaGroup>): wrapper criteria whose
+   * clinical logic lives in nested criteria with their own operators,
+   * negation, filters, restrictions, and linked criteria.
+   */
+  baseCriteriaGroups?: Array<{ memberOperator: MemberOperator; criteria: SearchCriterion[] }>;
 }
 
 export interface PopulationCriterionRef {
